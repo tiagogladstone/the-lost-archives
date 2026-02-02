@@ -14,7 +14,7 @@ on:
         default: 'en'
 
 env:
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
   PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
   PYTHON_VERSION: '3.10'
   ARTIFACTS_DIR: artifacts

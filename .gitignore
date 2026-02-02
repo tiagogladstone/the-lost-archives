@@ -1,19 +1,17 @@
 # Python
-__pycache__/
-*.py[cod]
 venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
 .env
 
-# Output
-output/
-temp/
-*.mp4
-*.mp3
-*.wav
+# IDE
+.idea/
+.vscode/
 
-# Secrets
-*.json
-!config/*.yaml
-
-# OS
-.DS_Store
+# Other
+*.DS_Store

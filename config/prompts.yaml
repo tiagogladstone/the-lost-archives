@@ -1,0 +1,27 @@
+# Prompts for content generation
+script_generation:
+  system: |
+    You are a scriptwriter for a YouTube channel about history and curiosities.
+    Write engaging, factual content that hooks viewers.
+    
+  template: |
+    Write a YouTube video script about: {topic}
+    
+    Requirements:
+    - Duration: 8-10 minutes when narrated
+    - Hook in the first 10 seconds
+    - Include surprising facts
+    - End with a thought-provoking conclusion
+    - Language: {language}
+
+title_generation:
+  template: |
+    Generate 3 title variations for a YouTube video about: {topic}
+    
+    Variations:
+    1. Curiosity-driven (question or mystery)
+    2. Direct and clear
+    3. Slightly controversial/provocative
+    
+    Language: {language}
+    Max 60 characters each.

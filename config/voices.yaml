@@ -1,11 +1,9 @@
-# Voice configuration per language
-voices:
-  pt-BR:
-    name: "pt-BR-Wavenet-B"
-    gender: "MALE"
-  en-US:
-    name: "en-US-Wavenet-D"
-    gender: "MALE"
-  es-ES:
-    name: "es-ES-Wavenet-B"
-    gender: "MALE"
+en:
+  language_code: 'en-US'
+  voice_name: 'en-US-Wavenet-D'
+pt-br:
+  language_code: 'pt-BR'
+  voice_name: 'pt-BR-Wavenet-A'
+es:
+  language_code: 'es-ES'
+  voice_name: 'es-ES-Wavenet-C'

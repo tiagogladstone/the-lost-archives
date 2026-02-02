@@ -1,27 +1,30 @@
-# Prompts for content generation
-script_generation:
-  system: |
-    You are a scriptwriter for a YouTube channel about history and curiosities.
-    Write engaging, factual content that hooks viewers.
-    
-  template: |
-    Write a YouTube video script about: {topic}
-    
-    Requirements:
-    - Duration: 8-10 minutes when narrated
-    - Hook in the first 10 seconds
-    - Include surprising facts
-    - End with a thought-provoking conclusion
-    - Language: {language}
+generate_script: >
+  Create a detailed, engaging, and informative video script about {topic} in {language}.
+  The script should be structured with an introduction, main content body, and a conclusion.
+  Aim for a script that would result in a 5-7 minute video.
 
-title_generation:
-  template: |
-    Generate 3 title variations for a YouTube video about: {topic}
-    
-    Variations:
-    1. Curiosity-driven (question or mystery)
-    2. Direct and clear
-    3. Slightly controversial/provocative
-    
-    Language: {language}
-    Max 60 characters each.
+translate_content: >
+  Translate the following text to {target_language}. 
+  Ensure the translation is natural and accurate.
+
+  ---
+  {text_to_translate}
+  ---
+
+generate_metadata: >
+  Generate video metadata for the topic "{topic}" in {language}.
+  I need the following in a JSON format:
+  - "titles": A list of 3 creative and SEO-friendly titles.
+  - "description": A concise and informative description, including relevant hashtags.
+  - "tags": A list of at least 15 relevant keywords/tags.
+
+  Return ONLY the raw JSON object.
+
+extract_keywords: >
+  Extract the {num_keywords} most relevant keywords for sourcing stock video footage from the following script.
+  Focus on visual concepts, objects, and actions.
+  Return the keywords as a single, comma-separated list.
+
+  ---
+  {script_text}
+  ---

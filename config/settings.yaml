@@ -1,17 +1,15 @@
-# The Lost Archives - Settings
-project:
-  name: "The Lost Archives"
-  languages: ["pt-BR", "en-US", "es-ES"]
+# General project settings
+project_name: "The Lost Archives"
+default_language: "en"
+supported_languages:
+  - "en"
+  - "pt-br"
+  - "es"
 
-gemini:
-  model: "gemini-2.0-flash"
-  
-tts:
-  provider: "google"
-  
-pexels:
-  clips_per_video: 15
-  
-output:
-  resolution: "1920x1080"
-  fps: 30
+# Video settings
+video_resolution: "1920x1080"
+music_volume: 0.15
+
+# API settings
+pexels_videos_per_keyword: 3
+gemini_model: "gemini-1.5-flash"

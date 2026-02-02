@@ -18,7 +18,6 @@ def generate_metadata(topic, languages, output_path):
         raise ValueError("GOOGLE_API_KEY not found in environment variables.")
 
     client = genai.Client(api_key=api_key)
-    model = client.models.get('gemini-1.5-flash') # Using 1.5 flash as it's good for this kind of task
 
     metadata = {}
 
@@ -29,7 +28,7 @@ def generate_metadata(topic, languages, output_path):
         You are a YouTube content strategist. Your task is to generate compelling metadata for a video about the topic: "{topic}".
         The target language for the metadata is: {lang}.
 
-        Please generate the following, formatted as a single, valid JSON object, and nothing else.
+        Please generate the following, formatted as a single, valid JSON object, and nothing else. Your entire response must be only the JSON object.
 
         1.  **titles**: An object containing exactly three variations of the title:
             -   `curiosity_driven`: A title that sparks curiosity and asks a question (e.g., "What if...?").
@@ -51,18 +50,17 @@ def generate_metadata(topic, languages, output_path):
           "tags": ["ancient rome", "fall of rome", "roman empire", ...]
         }}
 
-        Now, generate the JSON for the topic "{topic}" in {lang}. Output ONLY the JSON object.
+        Now, generate the JSON for the topic "{topic}" in {lang}. Output ONLY the JSON object. Do not include markdown formatting like ```json.
         """
         
         try:
-            # Forcing JSON output
-            response = model.generate_content(
-                contents=prompt,
-                generation_config={"response_mime_type": "application/json"}
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt
             )
             
             # The response text should now be a clean JSON string
-            clean_response = response.text.strip()
+            clean_response = response.text.strip().replace("```json", "").replace("```", "").strip()
             
             if clean_response:
                 metadata[lang] = json.loads(clean_response)

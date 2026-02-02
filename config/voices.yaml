@@ -1,9 +1,9 @@
-en:
+en-US:
   language_code: 'en-US'
   voice_name: 'en-US-Wavenet-D'
-pt-br:
+pt-BR:
   language_code: 'pt-BR'
-  voice_name: 'pt-BR-Wavenet-A'
-es:
+  voice_name: 'pt-BR-Wavenet-B'
+es-ES:
   language_code: 'es-ES'
-  voice_name: 'es-ES-Wavenet-C'
+  voice_name: 'es-ES-Wavenet-B'

@@ -2,8 +2,7 @@
 import os
 import argparse
 import json
-import google.generativeai as genai
-from dotenv import load_dotenv
+from google import genai
 
 def generate_metadata(topic, languages, output_path):
     """
@@ -11,36 +10,59 @@ def generate_metadata(topic, languages, output_path):
 
     Args:
         topic (str): The topic of the video.
-        languages (list): A list of language codes (e.g., ['en', 'pt-br']).
+        languages (list): A list of language codes (e.g., ['pt-BR']).
         output_path (str): The path to save the generated metadata as a JSON file.
     """
-    load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in environment variables.")
+        raise ValueError("GOOGLE_API_KEY not found in environment variables.")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    client = genai.Client(api_key=api_key)
+    model = client.models.get('gemini-1.5-flash') # Using 1.5 flash as it's good for this kind of task
 
     metadata = {}
 
     for lang in languages:
-        print(f"Generating metadata for {topic} in {lang}...")
+        print(f"Generating metadata for '{topic}' in {lang}...")
         
         prompt = f"""
-        Generate video metadata for the topic '{topic}' in the language '{lang}'.
-        I need the following in a JSON format:
-        - 'titles': A list of 3 creative and engaging titles.
-        - 'description': A concise and informative description.
-        - 'tags': A list of relevant keywords/tags.
-        
-        Return only the JSON object.
+        You are a YouTube content strategist. Your task is to generate compelling metadata for a video about the topic: "{topic}".
+        The target language for the metadata is: {lang}.
+
+        Please generate the following, formatted as a single, valid JSON object, and nothing else.
+
+        1.  **titles**: An object containing exactly three variations of the title:
+            -   `curiosity_driven`: A title that sparks curiosity and asks a question (e.g., "What if...?").
+            -   `direct`: A straightforward, keyword-rich title for SEO.
+            -   `provocative`: A bold or controversial title that challenges the viewer's assumptions.
+
+        2.  **description**: A concise, SEO-friendly description of about 150-200 words. It should start with a strong hook, naturally include keywords related to the topic, and end with a call to action (e.g., "Subscribe for more stories like this!").
+
+        3.  **tags**: A list of exactly 15 relevant and specific tags, including a mix of broad and long-tail keywords.
+
+        Example for "The Fall of Rome":
+        {{
+          "titles": {{
+            "curiosity_driven": "What If Rome Never Fell? The World We Never Knew",
+            "direct": "The History of the Roman Empire's Collapse",
+            "provocative": "Why Rome Deserved to Fall"
+          }},
+          "description": "...",
+          "tags": ["ancient rome", "fall of rome", "roman empire", ...]
+        }}
+
+        Now, generate the JSON for the topic "{topic}" in {lang}. Output ONLY the JSON object.
         """
         
         try:
-            response = model.generate_content(prompt)
-            # Clean up the response to ensure it's valid JSON
-            clean_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+            # Forcing JSON output
+            response = model.generate_content(
+                contents=prompt,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            # The response text should now be a clean JSON string
+            clean_response = response.text.strip()
             
             if clean_response:
                 metadata[lang] = json.loads(clean_response)
@@ -56,19 +78,30 @@ def generate_metadata(topic, languages, output_path):
             print(f"An error occurred while generating metadata for {lang}: {e}")
             metadata[lang] = {"error": str(e)}
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=4, ensure_ascii=False)
+    # Ensure the output directory exists
+    if output_path:
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         
-    print(f"\nMetadata generation complete. Saved to {output_path}")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=4, ensure_ascii=False)
+            
+        print(f"\\nMetadata generation complete. Saved to {output_path}")
+    else:
+        # If no output path, print to stdout
+        print(json.dumps(metadata, indent=4, ensure_ascii=False))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate video metadata in multiple languages.")
+    parser = argparse.ArgumentParser(description="Generate video metadata using the Google GenAI API.")
     parser.add_argument("--topic", type=str, required=True, help="The topic of the video.")
-    parser.add_argument("--languages", nargs='+', required=True, help="List of languages (e.g., en pt-br es).")
+    parser.add_argument("--languages", type=str, required=True, help="Comma-separated list of language codes (e.g., pt-BR,en,es).")
     parser.add_argument("--output", type=str, required=True, help="The path to save the metadata JSON file.")
     
     args = parser.parse_args()
     
-    generate_metadata(args.topic, args.languages, args.output)
+    # Split the languages string into a list
+    languages_list = [lang.strip() for lang in args.languages.split(',')]
+    
+    generate_metadata(args.topic, languages_list, args.output)

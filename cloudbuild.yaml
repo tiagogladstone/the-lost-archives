@@ -1,8 +1,13 @@
 steps:
+  # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/lost-archives', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/lost-archives:$COMMIT_SHA', '.']
+
+  # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/lost-archives']
+    args: ['push', 'gcr.io/$PROJECT_ID/lost-archives:$COMMIT_SHA']
+
+  # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -10,7 +15,7 @@ steps:
       - 'deploy'
       - 'lost-archives'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/lost-archives'
+      - 'gcr.io/$PROJECT_ID/lost-archives:$COMMIT_SHA'
       - '--region'
       - 'us-central1'
       - '--platform'
@@ -20,5 +25,9 @@ steps:
       - '2Gi'
       - '--timeout'
       - '900'
-      - '--set-env-vars'
-      - 'GOOGLE_API_KEY=${_GOOGLE_API_KEY},PEXELS_API_KEY=${_PEXELS_API_KEY}'
+
+images:
+  - 'gcr.io/$PROJECT_ID/lost-archives:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

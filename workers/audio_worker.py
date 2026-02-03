@@ -117,7 +117,7 @@ class AudioWorker(BaseWorker):
             logging.info(f"[{self.worker_id}] Uploading audio to Supabase Storage at: {file_path}")
             self.supabase.storage.from_('audio').upload(
                 path=file_path,
-                file=temp_file,
+                file=audio_data,
                 file_options={"content-type": "audio/mpeg"}
             )
 

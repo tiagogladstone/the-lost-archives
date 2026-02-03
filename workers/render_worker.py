@@ -88,7 +88,7 @@ class RenderWorker(BaseWorker):
             storage_path = f"{story_id}/{video_filename}" # Salva em uma pasta com o ID da story
             
             with open(final_video_path, 'rb') as f:
-                self.supabase.storage.from_('videos').upload(storage_path, f)
+                self.supabase.storage.from_('videos').upload(storage_path, f.read())
 
             video_url = self.supabase.storage.from_('videos').get_public_url(storage_path)
 

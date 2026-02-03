@@ -93,7 +93,7 @@ class ThumbnailWorker(BaseWorker):
                 # 4. Upload para Storage
                 storage_path = f"{story_id}/{img_filename}"
                 with open(local_img_path, 'rb') as f:
-                    self.supabase.storage.from_('thumbnails').upload(storage_path, f, {'content-type': 'image/png'})
+                    self.supabase.storage.from_('thumbnails').upload(storage_path, f.read(), {'content-type': 'image/png'})
                 
                 image_url = self.supabase.storage.from_('thumbnails').get_public_url(storage_path)
 

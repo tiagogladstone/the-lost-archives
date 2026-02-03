@@ -126,7 +126,7 @@ Each task processed by a worker follows this simple lifecycle.
 
 The API is the backbone of the iterative review and publication workflow.
 
--   `POST /stories/{id}/titles/{title_id}/feedback`
+-   ~~`POST /stories/{id}/titles/{title_id}/feedback`~~ **REMOVIDO: Títulos vêm de pesquisa SEO e NÃO são editáveis.**
     -   **Body:** `{"feedback": "troca 'mystery' por 'secret'"}`
     -   **Action:** Triggers an AI regeneration of the specific title using the provided feedback. Updates the `title_text` and increments its `version`. Records the feedback in `feedback_history`.
 

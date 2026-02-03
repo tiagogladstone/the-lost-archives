@@ -104,14 +104,10 @@ Esta fase começa quando as tarefas da Fase 2 são concluídas e culmina na publ
     -   **Fluxo de Review no Dashboard:**
         1.  Sistema gera 3 thumbnails + 3 títulos + descrição + tags.
         2.  Usuário vê preview de TUDO no dashboard.
-        3.  Para CADA item, pode:
-            -   ✅ Aprovar como está.
-            -   ✏️ Dar feedback em texto livre (ex: "nessa thumb, aumente o contraste e mude o texto para X").
-            -   🔄 Sistema regenera com o feedback usando IA.
-            -   Repetir até aprovar.
-        4.  Quando TODOS os 3 títulos e 3 thumbs estão aprovados → botão "PUBLICAR" fica ativo.
-        5.  YouTube recebe os 3 títulos + 3 thumbs para teste A/B nativo.
-    -   **Importante:** Os 3 títulos e 3 thumbs NÃO são "escolha 1" — são os 3 que vão pro teste A/B do YouTube!
+        3.  O usuário deve **SELECIONAR** o melhor título e a melhor thumbnail entre as opções geradas.
+        4.  Opcionalmente, o usuário pode editar a descrição e as tags.
+        5.  Após a seleção de 1 título e 1 thumbnail, o botão "PUBLICAR" fica ativo.
+    -   **Importante:** A pesquisa indicou que a API do YouTube não suporta o upload de múltiplas thumbnails/títulos para um teste A/B nativo no momento do upload. A funcionalidade "Testar e comparar" do YouTube é configurada no YouTube Studio após o upload. Portanto, o fluxo foi corrigido para "selecionar 1 de 3".
     -   A `story` permanece no estado `ready_for_review` até que o botão "PUBLICAR" seja clicado.
 
 4.  **Publicação**
@@ -139,12 +135,14 @@ A API é o ponto de entrada e o mecanismo de controle para o fluxo de revisão.
     -   **Ação:** Retorna todos os dados necessários para a página de revisão: preview do vídeo, opções de título e opções de thumbnail.
 -   `POST /stories/{id}/select-title`:
     -   **Body:** `{ "title_option_id": "uuid" }`
-    -   **Ação:** Marca um título como selecionado no banco de dados.
+    -   **Ação:** Marca um título como `selected_title` na tabela `stories`.
 -   `POST /stories/{id}/select-thumbnail`:
     -   **Body:** `{ "thumbnail_option_id": "uuid" }`
-    -   **Ação:** Marca uma thumbnail como selecionada.
+    -   **Ação:** Marca a URL de uma thumbnail como `selected_thumbnail_url` na tabela `stories`.
 -   `POST /stories/{id}/publish`:
-    -   **Ação:** Dispara o `upload_worker` para publicar o vídeo com os metadados selecionados.
+    -   **Ação:** Dispara o `upload_worker` para publicar o vídeo com os metadados selecionados. Requer que `selected_title` e `selected_thumbnail_url` não estejam nulos.
+-   `POST /stories/{id}/retry`:
+    -   **Ação:** Re-enfileira o último job que falhou para a `story`.
 
 ## 6. Dashboard Vercel
 
@@ -160,6 +158,7 @@ A API é o ponto de entrada e o mecanismo de controle para o fluxo de revisão.
 -   **Workers:** Cada worker será empacotado em sua própria imagem Docker e deployado como um serviço separado no Cloud Run.
 -   **API:** O servidor FastAPI também será deployado como um serviço Cloud Run.
 -   **CI/CD:** GitHub Actions para construir e deployar as imagens Docker no Cloud Run a cada push para a `main`.
+-   **Autenticação:** A API será protegida por uma API Key no header `X-API-Key`. A configuração será gerenciada via Secret Manager no Google Cloud.
 
 ## 8. Transição
 

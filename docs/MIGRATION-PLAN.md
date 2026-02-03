@@ -1,214 +1,195 @@
-# Plano de Migração: The Lost Archives para SaaS
+## 1. Visão Geral e Novo Fluxo
 
-Este documento detalha o plano de migração do pipeline "The Lost Archives" de uma arquitetura monolítica para um modelo Software-as-a-Service (SaaS) baseado em workers, Supabase e um dashboard no Vercel.
+Este documento detalha o plano de migração do pipeline "The Lost Archives" de uma arquitetura monolítica para um modelo Software-as-a-Service (SaaS) refinado. A mudança principal é a transição de um fluxo sequencial de 7 workers para um **fluxo de 3 fases** com processamento paralelo e um passo de **revisão humana obrigatória** antes da publicação.
 
-## 1. Pré-requisitos
+### Status Flow
+O status de uma `story` seguirá o seguinte fluxo:
+`pending` → `generating_script` → `producing` → `rendering` → `ready_for_review` → `publishing` → `published`
+
+Em caso de erro, o status mudará para `failed`, com uma `error_message` e a possibilidade de `retry`.
+
+### Input do Sistema
+A criação de uma nova história (story) agora requer os seguintes campos:
+-   **Tema** (obrigatório): O tópico central do vídeo (ex: "The Library of Alexandria").
+-   **Descrição breve** (obrigatório): 2-3 frases de contexto sobre o tema.
+-   **Duração estimada** (obrigatório): Em minutos (ex: 8).
+-   **Idiomas** (opcional, default: `en-US`): Lista de idiomas para tradução (ex: `['pt-BR', 'es-ES']`).
+
+## 2. Pré-requisitos
 
 -   [ ] **Criar projeto no Supabase:**
     -   Acessar [supabase.com](https://supabase.com) e criar um novo projeto no Free Tier.
 -   [ ] **Configurar Supabase Storage:**
-    -   Dentro do projeto, criar três buckets públicos:
+    -   Dentro do projeto, criar os seguintes buckets públicos:
         -   `images`: Para armazenar as imagens geradas para cada cena.
         -   `audio`: Para os arquivos de narração de cada cena.
         -   `videos`: Para os vídeos finais renderizados.
+        -   `thumbnails`: Para as opções de thumbnail geradas.
 -   [ ] **Obter Credenciais Supabase:**
     -   Navegar até "Project Settings" > "API".
-    -   Copiar `SUPABASE_URL` (Project URL) e `SUPABASE_KEY` (o `anon` public key é suficiente para os workers, mas a `service_role` key será necessária para rodar o schema).
+    -   Copiar `SUPABASE_URL` e `SUPABASE_KEY` (`service_role`).
 -   [ ] **Salvar Credenciais no Vault:**
-    -   Armazenar as credenciais de forma segura.
     -   `./scripts/vault.sh set supabase-url "URL_COPIADA"`
     -   `./scripts/vault.sh set supabase-service-key "SERVICE_KEY_COPIADA"`
 -   [ ] **Listar Variáveis de Ambiente:**
-    -   `SUPABASE_URL`: URL do projeto Supabase.
-    -   `SUPABASE_KEY`: Chave de serviço (ou anônima) do Supabase.
-    -   `GOOGLE_API_KEY`: Chave de API para Gemini, Imagen e Google TTS.
-    -   `YOUTUBE_TOKEN_JSON`: Credenciais de upload para o YouTube (em base64).
-    -   `PEXELS_API_KEY`: (Opcional, para fallback) Chave de API do Pexels.
+    -   `SUPABASE_URL`, `SUPABASE_KEY`
+    -   `GOOGLE_API_KEY` (Gemini, Imagen, Google TTS)
+    -   `YOUTUBE_TOKEN_JSON` (em base64)
 
-## 2. Configuração do Banco de Dados
+## 3. Configuração do Banco de Dados
 
 -   [ ] **Executar Schema SQL:**
-    -   Conectar-se ao banco de dados Supabase e executar o conteúdo do arquivo `database/schema.sql` no SQL Editor para criar as tabelas `stories`, `scenes`, `jobs`, e `assets`.
+    -   Conectar-se ao banco de dados Supabase e executar o conteúdo atualizado do arquivo `database/schema.sql`. Isso criará as tabelas `stories`, `scenes`, `title_options`, e `thumbnail_options`.
 -   [ ] **Testar Conexão Python:**
-    -   Criar um script de teste (`database/supabase_setup.py`) que utiliza as variáveis de ambiente para se conectar ao Supabase e realizar uma query simples (e.g., `select * from stories limit 1`).
--   [ ] **Criar RLS Policies (Opcional):**
-    -   Inicialmente, a `service_role` key dará acesso total. Para um ambiente de produção mais seguro, políticas de Row Level Security podem ser adicionadas para restringir o acesso dos workers apenas aos `jobs` que eles podem processar.
+    -   Garantir que um script de teste (`database/supabase_setup.py`) consegue se conectar e fazer queries nas novas tabelas.
 -   [ ] **Configurar Realtime:**
-    -   No dashboard do Supabase, ir em "Database" > "Replication".
-    -   Habilitar a replicação para as tabelas `stories` e `jobs` para que o dashboard Vercel possa receber atualizações em tempo real.
+    -   Habilitar a replicação para as tabelas `stories`, `title_options`, e `thumbnail_options` para que o dashboard Vercel receba atualizações em tempo real.
 
-## 3. Implementação dos Workers
+## 4. O Fluxo de 3 Fases
 
-A implementação seguirá uma ordem de dependência lógica, começando pela base e avançando pelo pipeline.
+A arquitetura é baseada em três fases distintas que orquestram a criação do vídeo.
 
-### 1. **base_worker.py**
--   **Input:** N/A. É a classe base.
--   **Output:** N/A.
--   **Script Reutilizado:** `workers/base_worker.py`
--   **Modificações:**
-    -   Implementar uma lógica de "claim" atômica para jobs, preferencialmente usando uma função RPC no PostgreSQL para evitar race conditions. O `SELECT` seguido de `UPDATE` atual é propenso a falhas sob concorrência.
-    -   Adicionar logging mais robusto.
--   **Variáveis de Ambiente:** `SUPABASE_URL`, `SUPABASE_KEY`.
--   **Teste Isolado:** Não pode ser testado diretamente.
+### **FASE 1 - Roteiro (Sequencial)**
 
-### 2. **script_worker.py**
--   **Input:** `job` com `story_id`. O worker busca o `topic` da história no banco.
--   **Output:** Atualiza a tabela `stories` com o `script_text` e cria múltiplas entradas na tabela `scenes`.
--   **Script Reutilizado:** `scripts/generate_script.py` e `workers/script_worker.py`.
--   **Modificações:**
-    1.  Integrar a lógica de `generate_script.py` dentro do método `process`.
-    2.  Após gerar o script, o worker deve parseá-lo em parágrafos/cenas.
-    3.  Para cada cena, inserir uma nova linha na tabela `scenes` com `story_id`, `scene_order` e `text_content`.
-    4.  Atualizar o status da `story` para `generating_images`.
-    5.  Criar um novo `job` do tipo `generate_images` para a `story`.
--   **Variáveis de Ambiente:** `GOOGLE_API_KEY`.
--   **Teste Isolado:** Chamar o método `process` com um `job` mockado e verificar se as tabelas `stories` e `scenes` são populadas corretamente.
+Nesta fase, apenas um worker é executado para criar a base da história.
 
-### 3. **image_worker.py**
--   **Input:** `job` com `story_id`. O worker busca todas as `scenes` pendentes para a história.
--   **Output:** Para cada cena, atualiza `image_url` e `image_prompt` na tabela `scenes`.
--   **Script Reutilizado:** `scripts/fetch_media_v2.py` (para a lógica de extração de prompts) e `scripts/generate_image.py`.
--   **Modificações:**
-    1.  O worker deve primeiro buscar todas as `scenes` da `story` que não têm `image_url`.
-    2.  Para cada cena, usar Gemini para gerar um `image_prompt` a partir do `text_content`.
-    3.  Usar a lógica de `generate_image.py` para gerar a imagem.
-    4.  Fazer upload da imagem para o bucket `images` no Supabase Storage.
-    5.  Atualizar a linha da `scene` com a URL do storage e o prompt usado.
-    6.  Quando todas as imagens de uma `story` forem geradas, criar um novo `job` do tipo `generate_audio`.
--   **Variáveis de Ambiente:** `GOOGLE_API_KEY`.
--   **Teste Isolado:** Chamar `process` com um `job` mockado, uma `story` e `scenes` pré-existentes. Verificar se as imagens são criadas no Storage e as URLs atualizadas.
+-   **Worker:** `script_worker`
+-   **Input:** Tema, descrição e duração.
+-   **Ação:**
+    1.  Usa Gemini para gerar um roteiro completo.
+    2.  Divide o roteiro em `scenes` (parágrafos).
+    3.  Popula a tabela `scenes` com o texto de cada cena.
+-   **Output:** Roteiro completo dividido em cenas.
+-   **Transição:** Ao concluir, o status da `story` muda de `generating_script` para `producing`.
 
-### 4. **audio_worker.py**
--   **Input:** `job` com `story_id`. Busca todas as `scenes` com `image_url` mas sem `audio_url`.
--   **Output:** Para cada cena, atualiza `audio_url` na tabela `scenes`.
--   **Script Reutilizado:** `scripts/generate_tts.py`.
--   **Modificações:**
-    1.  Integrar a lógica de `generate_tts.py` para converter o `text_content` de cada cena em áudio.
-    2.  Fazer upload do áudio para o bucket `audio` no Supabase Storage.
-    3.  Atualizar a `scene` com a `audio_url`.
-    4.  Quando todos os áudios de uma `story` forem gerados, criar um `job` do tipo `generate_metadata`.
--   **Variáveis de Ambiente:** `GOOGLE_API_KEY`.
--   **Teste Isolado:** Similar ao `image_worker`.
+### **FASE 2 - Produção (Paralelo)**
 
-### 5. **metadata_worker.py**
--   **Input:** `job` com `story_id`. Busca o `script_text` da `story`.
--   **Output:** Atualiza o campo `metadata` (JSONB) na tabela `stories`.
--   **Script Reutilizado:** `scripts/generate_metadata.py`.
--   **Modificações:**
-    1.  Integrar a lógica de `generate_metadata.py`.
-    2.  Salvar o JSON de metadados diretamente no campo `metadata` da `story`.
-    3.  Após a conclusão, criar um `job` do tipo `render_video`.
--   **Variáveis de Ambiente:** `GOOGLE_API_KEY`.
--   **Teste Isolado:** Chamar com `job` mockado e verificar se o JSON na tabela `stories` é atualizado corretamente.
+Quando o roteiro está pronto, múltiplos workers são disparados para rodar em paralelo, cada um cuidando de um aspecto da produção.
 
-### 6. **render_worker.py**
--   **Input:** `job` com `story_id`.
--   **Output:** Cria o vídeo final e o armazena no bucket `videos` do Supabase Storage.
--   **Script Reutilizado:** `scripts/render_video.py` e `scripts/apply_ken_burns.py`.
--   **Modificações:**
-    1.  O worker precisa baixar todas as `images` e `audios` da `story` a partir das URLs no Supabase Storage para um diretório temporário.
-    2.  Concatenar os áudios das cenas em um único arquivo de narração.
-    3.  Executar a lógica de `render_video.py`, que já inclui o efeito Ken Burns.
-    4.  Fazer upload do vídeo final para o bucket `videos`.
-    5.  Criar um `job` do tipo `upload_youtube`.
--   **Variáveis de Ambiente:** N/A (requer FFmpeg instalado no ambiente de execução).
--   **Teste Isolado:** O mais complexo. Requer `story`, `scenes` com `image_url` e `audio_url` populadas. Verificar se o vídeo é gerado e enviado ao Storage.
+-   **Worker:** `image_worker`
+    -   **Ação:** Gera de 10 a 15 imagens (uma por cena) usando Imagen 4.
+    -   **Output:** Salva as imagens no Supabase Storage e atualiza as `scenes` com as `image_url`.
+-   **Worker:** `audio_worker`
+    -   **Ação:** Gera a narração TTS para o texto de cada cena.
+    -   **Output:** Salva os arquivos de áudio no Supabase Storage e atualiza as `scenes` com as `audio_url`.
+-   **Worker:** `translation_worker` (NOVO!)
+    -   **Ação:** Traduz o roteiro de cada cena para os idiomas solicitados (ex: PT-BR, ES-ES).
+    -   **Output:** Atualiza o campo `translated_text` (JSONB) em cada `scene`.
 
-### 7. **upload_worker.py**
--   **Input:** `job` com `story_id`. Busca o vídeo final do Storage e os metadados da `story`.
--   **Output:** Atualiza `youtube_url` e `youtube_video_id` na `story` e muda seu status para `published`.
--   **Script Reutilizado:** `scripts/upload_youtube.py`.
--   **Modificações:**
-    1.  Baixar o vídeo final do bucket `videos`.
-    2.  Extrair `title`, `description` e `tags` do campo `metadata` da `story`.
-    3.  Executar a lógica de `upload_youtube.py`.
-    4.  Atualizar a `story` com o link do YouTube e o status final.
--   **Variáveis de Ambiente:** `YOUTUBE_TOKEN_JSON`.
--   **Teste Isolado:** Requer um vídeo de teste no Storage e metadados na `story`. Verificar se o vídeo é enviado ao YouTube e a `story` é atualizada.
+### **FASE 3 - Pós-Produção e Revisão (Sequencial com Gatilho Humano)**
 
-## 4. Orquestrador
+Esta fase começa quando as tarefas da Fase 2 são concluídas e culmina na publicação, que só ocorre após aprovação manual.
 
--   **Disparo Inicial:** A criação de uma nova `story` via API (ver Seção 5) deve automaticamente criar o primeiro `job` na fila, do tipo `generate_script`.
--   **Encadeamento:** Cada worker, ao concluir sua tarefa para uma `story`, é responsável por criar o `job` da etapa seguinte. Isso cria uma cadeia de eventos descentralizada e resiliente.
-    -   `script_worker` (fim) → cria `job(generate_images)`
-    -   `image_worker` (fim, todas as imagens prontas) → cria `job(generate_audio)`
-    -   `audio_worker` (fim, todos os áudios prontos) → cria `job(generate_metadata)`
-    -   `metadata_worker` (fim) → cria `job(render_video)`
-    -   `render_worker` (fim) → cria `job(upload_youtube)`
-    -   `upload_worker` (fim) → finaliza o processo.
+1.  **Renderização**
+    -   **Worker:** `render_worker`
+    -   **Gatilho:** Inicia quando todas as imagens e áudios da Fase 2 estão prontos.
+    -   **Ação:**
+        1.  Baixa todas as imagens e áudios.
+        2.  Aplica o efeito Ken Burns nas imagens.
+        3.  Usa FFmpeg para combinar imagem e áudio, criando o vídeo final.
+    -   **Output:** Vídeo final salvo no Supabase Storage.
+    -   **Transição:** Ao concluir, o status da `story` muda de `rendering` para `ready_for_review`.
+
+2.  **Preparação para Revisão**
+    -   **Worker:** `thumbnail_worker` (NOVO!)
+        -   **Ação:** Gera 3 opções de thumbnail para o vídeo.
+        -   **Output:** Salva as thumbnails no Storage e cria 3 entradas na tabela `thumbnail_options`.
+    -   **Worker:** `metadata_worker`
+        -   **Ação:** Gera 3 opções de título, uma descrição otimizada para SEO e tags relevantes.
+        -   **Output:** Cria 3 entradas na tabela `title_options` e atualiza a `story` com a descrição e tags.
+
+3.  **Revisão Humana (Dashboard)**
+    -   O sistema agora **PARA** e aguarda a intervenção humana.
+    -   No Dashboard, na página `/stories/{id}/review`, o usuário pode:
+        -   Assistir a um preview do vídeo.
+        -   Selecionar 1 de 3 títulos.
+        -   Selecionar 1 de 3 thumbnails.
+        -   Editar a descrição e as tags.
+    -   A `story` permanece no estado `ready_for_review` até que o botão "PUBLICAR" seja clicado.
+
+4.  **Publicação**
+    -   **Worker:** `upload_worker`
+    -   **Gatilho:** Disparado pela chamada da API `POST /stories/{id}/publish`.
+    -   **Ação:**
+        1.  Baixa o vídeo final.
+        2.  Usa o título e thumbnail selecionados pelo usuário.
+        3.  Faz o upload do vídeo para o YouTube.
+    -   **Output:** Atualiza a `story` com a `youtube_url`.
+    -   **Transição:** O status final muda para `published`.
 
 ## 5. API (FastAPI)
 
-Uma API simples em FastAPI será o ponto de entrada para o sistema.
+A API é o ponto de entrada e o mecanismo de controle para o fluxo de revisão.
 
 -   `POST /stories`:
-    -   **Body:** `{ "topic": "string", "language": "string" }`
-    -   **Ação:** Cria uma nova `story` na tabela com status `pending`. Cria o primeiro `job` (`generate_script`) para essa `story`.
-    -   **Retorno:** `{ "story_id": "uuid" }`
+    -   **Body:** `{ "topic": "string", "description": "string", "target_duration_minutes": integer, "languages": ["string"] }`
+    -   **Ação:** Cria uma nova `story` e inicia a Fase 1.
 -   `GET /stories`:
-    -   **Ação:** Lista todas as `stories`, com status e timestamps.
-    -   **Retorno:** `[ { "id": ..., "topic": ..., "status": ... } ]`
+    -   **Ação:** Lista todas as `stories` e seus status.
 -   `GET /stories/{id}`:
-    -   **Ação:** Retorna os detalhes de uma `story`, incluindo suas `scenes`.
-    -   **Retorno:** `{ "id": ..., "status": ..., "scenes": [ ... ] }`
--   `POST /stories/{id}/retry`:
-    -   **Ação:** Se uma `story` falhou (`status: 'failed'`), permite reenfileirar o último `job` que falhou.
--   `DELETE /stories/{id}`:
-    -   **Ação:** Cancela uma `story` em andamento e seus `jobs` associados.
+    -   **Ação:** Retorna os detalhes de uma `story`.
+-   `GET /stories/{id}/review`:
+    -   **Ação:** Retorna todos os dados necessários para a página de revisão: preview do vídeo, opções de título e opções de thumbnail.
+-   `POST /stories/{id}/select-title`:
+    -   **Body:** `{ "title_option_id": "uuid" }`
+    -   **Ação:** Marca um título como selecionado no banco de dados.
+-   `POST /stories/{id}/select-thumbnail`:
+    -   **Body:** `{ "thumbnail_option_id": "uuid" }`
+    -   **Ação:** Marca uma thumbnail como selecionada.
+-   `POST /stories/{id}/publish`:
+    -   **Ação:** Dispara o `upload_worker` para publicar o vídeo com os metadados selecionados.
 
 ## 6. Dashboard Vercel
 
 -   **Stack:** Next.js 14, TypeScript, Supabase-JS, Tailwind CSS.
 -   **Páginas:**
-    -   `/` (Dashboard): Lista de todas as `stories` em uma tabela. Colunas: Tópico, Status, Criado em, Link do YouTube. O status deve ser atualizado em tempo real usando o Supabase Realtime.
-    -   `/new` (Criar Vídeo): Um formulário simples com campos "Tópico" e "Idioma" que faz um POST para a API `/stories`.
-    -   `/stories/{id}` (Detalhes): Mostra o progresso detalhado de uma `story`, listando cada `scene` e seu status individual (imagem, áudio).
--   **Autenticação:** Supabase Auth pode ser usado para proteger o dashboard.
--   **Deploy:** Configurado com a integração Vercel + GitHub para deploy contínuo.
+    -   `/` (Dashboard): Lista de `stories` com status em tempo real.
+    -   `/new` (Criar Vídeo): Formulário com os novos campos de input.
+    -   `/stories/{id}` (Detalhes): Progresso detalhado de uma `story`.
+    -   **`/stories/{id}/review` (NOVO!)**: Página de revisão onde o usuário assiste ao preview, seleciona título e thumbnail, edita metadados e clica em "Publicar".
 
 ## 7. Deploy
 
--   **Workers:** Cada worker será empacotado em sua própria imagem Docker e deployado como um serviço separado no Cloud Run. Isso permite escalar cada parte do pipeline de forma independente.
+-   **Workers:** Cada worker será empacotado em sua própria imagem Docker e deployado como um serviço separado no Cloud Run.
 -   **API:** O servidor FastAPI também será deployado como um serviço Cloud Run.
--   **Variáveis de Ambiente:** As credenciais e configurações serão injetadas em cada serviço do Cloud Run através de Secret Manager ou variáveis de ambiente diretas.
--   **CI/CD:** Um workflow simples no GitHub Actions pode ser configurado para construir e deployar as imagens Docker no Cloud Run a cada push para a branch `main`.
+-   **CI/CD:** GitHub Actions para construir e deployar as imagens Docker no Cloud Run a cada push para a `main`.
 
 ## 8. Transição
 
--   **Fase 1 (Desenvolvimento):** Manter o monolito (`main.py`) operacional para produção. Desenvolver e testar os workers e a API em um ambiente de staging separado.
--   **Fase 2 (Teste E2E):** Após testes isolados, realizar testes de ponta a ponta, criando histórias pela API e garantindo que o vídeo final seja gerado e enviado corretamente.
--   **Fase 3 (Cutover):** Uma vez que a nova arquitetura SaaS esteja estável e validada, o endpoint do Cloud Run do monolito pode ser desativado. A transição é "big bang", já que não há estado de usuário a ser migrado, apenas o processo de backend.
+-   A transição continua sendo "big bang", com a nova arquitetura substituindo o monolito após testes E2E completos.
 
 ## 9. Custos Estimados (Por Vídeo)
 
--   **Supabase:** Free Tier (500MB DB, 1GB storage) deve ser suficiente para os primeiros ~100 vídeos. Custo marginal baixo depois disso.
--   **Cloud Run:** Dentro do free tier generoso do Google Cloud, ou custo mínimo por execução.
--   **Vercel:** Free tier para o dashboard.
+-   **Supabase:** Free Tier para os primeiros ~100 vídeos.
+-   **Cloud Run:** Custo mínimo por execução.
+-   **Vercel:** Free tier.
 -   **APIs (Custo Principal):**
-    -   **Gemini (Script/Metadata/Prompts):** ~20.000 tokens por vídeo. Custo ~$0.02.
-    -   **Imagen 4 (Imagens):** ~15 imagens por vídeo @ $0.02/imagem = $0.30.
-    -   **Google TTS (Áudio):** ~10.000 caracteres por vídeo. Custo ~$0.02.
--   **Custo Total Estimado por Vídeo:** **~$0.34** (sem incluir custos de fallback ou processamento).
+    -   **Gemini (Script/Metadata/Prompts/Translation):** ~30.000 tokens por vídeo (incluindo tradução). Custo ~$0.03.
+    -   **Imagen 4 (Imagens):** ~15 imagens @ $0.02/imagem = $0.30.
+    -   **Google TTS (Áudio):** ~10.000 caracteres. Custo ~$0.02.
+-   **Custo Total Estimado por Vídeo:** **~$0.35**
 
 ## 10. Checklist de Implementação
 
 | Tarefa                                        | Quem           | Estimativa | Status      |
 | --------------------------------------------- | -------------- | ---------- | ----------- |
-| **Setup (Seção 1 & 2)**                       |                | **2h**     |             |
+| **Setup (Seção 2 & 3)**                       |                | **2h**     |             |
 | Criar projeto e buckets Supabase              | Manual         | 30 min     | `[ ] ToDo`  |
 | Salvar credenciais no vault                    | Manual         | 15 min     | `[ ] ToDo`  |
 | Rodar schema e testar conexão                 | Subagente      | 1h 15min   | `[ ] ToDo`  |
-| **Workers (Seção 3)**                         |                | **1-2 Dias** |             |
+| **Workers (Seção 4)**                         |                | **2-3 Dias** |             |
 | Implementar `script_worker.py`                | Subagente      | 2h         | `[ ] ToDo`  |
-| Implementar `image_worker.py`                 | Subagente      | 3h         | `[ ] ToDo`  |
-| Implementar `audio_worker.py`                 | Subagente      | 2h         | `[ ] ToDo`  |
-| Implementar `metadata_worker.py`              | Subagente      | 2h         | `[ ] ToDo`  |
+| Implementar `image_worker.py` (paralelo)      | Subagente      | 3h         | `[ ] ToDo`  |
+| Implementar `audio_worker.py` (paralelo)      | Subagente      | 2h         | `[ ] ToDo`  |
+| Implementar `translation_worker.py` (paralelo)| Subagente      | 2h         | `[ ] ToDo`  |
 | Implementar `render_worker.py`                | Subagente      | 4h         | `[ ] ToDo`  |
+| Implementar `thumbnail_worker.py`             | Subagente      | 2h         | `[ ] ToDo`  |
+| Implementar `metadata_worker.py` (com opções) | Subagente      | 2h         | `[ ] ToDo`  |
 | Implementar `upload_worker.py`                | Subagente      | 2h         | `[ ] ToDo`  |
-| **API & Dashboard (Seção 5 & 6)**             |                | **1-2 Dias** |             |
-| Desenvolver API FastAPI                       | Subagente      | 4h         | `[ ] ToDo`  |
+| **API & Dashboard (Seção 5 & 6)**             |                | **2 Dias**   |             |
+| Desenvolver API FastAPI (com novos endpoints) | Subagente      | 5h         | `[ ] ToDo`  |
 | Criar esqueleto do Dashboard Next.js          | Subagente      | 3h         | `[ ] ToDo`  |
-| Implementar páginas e Realtime                | Subagente      | 5h         | `[ ] ToDo`  |
+| Implementar página de Revisão                 | Subagente      | 6h         | `[ ] ToDo`  |
 | **Deploy & Testes (Seção 7 & 8)**             |                | **1 Dia**    |             |
 | Criar Dockerfiles para workers e API          | Subagente      | 3h         | `[ ] ToDo`  |
 | Configurar Cloud Run services                 | Manual         | 2h         | `[ ] ToDo`  |

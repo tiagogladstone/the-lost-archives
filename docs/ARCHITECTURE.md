@@ -1,114 +1,143 @@
-# Architecture: The Lost Archives - SaaS Pipeline
+# Architecture: The Lost Archives - Refined SaaS Pipeline
 
-This document outlines the SaaS architecture for the automated YouTube channel "The Lost Archives". The system is designed as a distributed set of workers that communicate via a central database, which acts as a job queue.
+This document outlines the refined SaaS architecture for the "The Lost Archives" YouTube channel. The system is designed around a **3-phase flow** featuring parallel processing and a mandatory human review step, orchestrated via a Supabase backend.
 
-## 1. Architecture Diagram (ASCII)
-
-```
-              +-----------------+      +-----------------+      +-----------------+
-              |   API Gateway   |----->|  New Story API  |----->|   Supabase DB   |
-              | (e.g., Cloud Run) |      |  (FastAPI)      |      | (PostgreSQL)    |
-              +-----------------+      +-------+---------+      +--------+--------+
-                                               |                           ^
-                                               |                           | (Update Status)
-                                               v                           |
-                                       +-------+---------+      +----------+----------+
-                                       |      JOBS       |      |      STORIES        |
-                                       |     (Queue)     |      |      (State)        |
-                                       +-----------------+      +---------------------+
-                                               |
-                                               | (Poll for jobs)
-                 +-----------------------------+--------------------------------+
-                 |                             |                                |
-                 v                             v                                v
-        +--------+--------+           +--------+--------+             +----------+----------+
-        |  Script Worker  |           |  Image Worker   |             |    Audio Worker     |
-        |   (Gemini)      |           |   (Imagen 4)    |             |    (Google TTS)     |
-        +-----------------+           +-----------------+             +---------------------+
-                 |                             |                                |
-                 |                             |                                |
-                 v                             v                                v
-        +--------+--------+           +--------+--------+             +----------+----------+
-        | Metadata Worker |           |  Render Worker  |             |   Upload Worker     |
-        |   (Gemini)      |           |    (FFmpeg)     |             | (YouTube API)       |
-        +-----------------+           +-----------------+             +---------------------+
+## 1. High-Level Architecture Diagram
 
 ```
++-------------------+      +----------------------+      +-----------------+
+| Vercel Dashboard  |----->| API (FastAPI)        |----->|   Supabase DB   |
+| (Human Interface) |      | (Cloud Run)          |      |   (PostgreSQL   |
++---------+---------+      +----------------------+      |    + Storage)   |
+          |                                              +--------+--------+
+          |                                                       |
+          | (POST /stories)                                       | (triggers...)
+          |                                                       v
++---------v-------------------------------------------------------+---------+
+|                                                                           |
+|  PHASE 1: SCRIPT (Sequential)                                             |
+|  +-----------------+       +----------------+                             |
+|  |   script_worker |------>| scenes created |                             |
+|  +-----------------+       +----------------+                             |
+|                                                                           |
++---------------------------------+-------------------+---------------------+
+                                  | (status: 'producing')
+                                  v
++---------------------------------+-----------------------------------------+
+|                                                                           |
+|  PHASE 2: PRODUCTION (Parallel)                                           |
+|  +-----------------+  +------------------+  +-----------------------+     |
+|  |   image_worker  |  |   audio_worker   |  |   translation_worker  |     |
+|  +-----------------+  +------------------+  +-----------------------+     |
+|          |                  |                       |                       |
+|          +------------------+-----------------------+                       |
+|                             v                                               |
+|               (all assets ready)                                          |
+|                             v                                               |
+|  +-----------------+                                                        |
+|  |  render_worker  |-----> Video Rendered to Storage                       |
+|  +-----------------+                                                        |
+|                                                                           |
++---------------------------------+-------------------+---------------------+
+                                  | (status: 'ready_for_review')
+                                  v
++---------------------------------+-----------------------------------------+
+|                                                                           |
+|  PHASE 3: REVIEW & PUBLISH (Human-in-the-loop)                            |
+|  +------------------+  +--------------------+                             |
+|  | thumbnail_worker |  |   metadata_worker  |---> Options written to DB   |
+|  +------------------+  +--------------------+                             |
+|                                                                           |
+|                 (Human reviews on Dashboard)                              |
+|  +------------------+                                                       |
+|  | User clicks PUBLISH |                                                     |
+|  +---------+--------+                                                       |
+|            | (POST /stories/{id}/publish)                                 |
+|            v                                                              |
+|  +-----------------+                                                        |
+|  |   upload_worker  |-----> Video on YouTube                               |
+|  +-----------------+                                                        |
+|                                                                           |
++---------------------------------------------------------------------------+
 
-## 2. Worker Descriptions
+```
 
-The system is composed of several independent workers, each responsible for a specific task in the video creation pipeline. They poll the `jobs` table for tasks.
+## 2. Worker & Phase Descriptions
 
--   **Script Worker:**
-    -   **Job Type:** `generate_script`
-    -   **Action:** Takes a `topic` from a `story` and uses a generative AI (Gemini) to write a complete script. It then breaks the script down into individual `scenes`.
-    -   **Output:** Updates the `story` with the full `script_text` and creates multiple `scenes` entries linked to the story.
+### Phase 1: Roteiro (Scripting)
+A single, sequential step to generate the narrative foundation.
 
--   **Image Worker:**
-    -   **Job Type:** `generate_images`
-    -   **Action:** For each `scene` in a story, it generates an image prompt and uses an image generation model (Imagen 4) to create a visual.
-    -   **Output:** Uploads the generated image to Supabase Storage and updates the `image_url` in the corresponding `scene`.
+-   **`script_worker`**:
+    -   **Trigger:** A new `story` is created via the API.
+    -   **Action:** Takes the story's `topic`, `description`, and `target_duration_minutes` to generate a full script using Gemini. It then parses this script into individual `scenes`.
+    -   **Output:** Creates multiple rows in the `scenes` table, linked to the parent `story`.
 
--   **Audio Worker:**
-    -   **Job Type:** `generate_audio`
-    -   **Action:** For each `scene`, it converts the `text_content` into speech using Google TTS.
-    -   **Output:** Uploads the generated audio file to Supabase Storage and updates the `audio_url` in the `scene`.
+### Phase 2: Produção (Production)
+A set of parallel workers that create the raw assets for the video.
 
--   **Metadata Worker:**
-    -   **Job Type:** `generate_metadata`
-    -   **Action:** Uses a generative AI (Gemini) to create a compelling title, description, and list of tags for the video based on the script.
-    -   **Output:** Updates the `metadata` JSONB field in the `story`.
+-   **`image_worker`**:
+    -   **Action:** For each scene, generates a corresponding image using Imagen 4.
+    -   **Output:** Uploads the image to Supabase Storage and updates the `image_url` for the scene.
+-   **`audio_worker`**:
+    -   **Action:** For each scene, converts the `text_content` to speech.
+    -   **Output:** Uploads the audio to Supabase Storage and updates the `audio_url` for the scene.
+-   **`translation_worker`**:
+    -   **Action:** Translates the `text_content` of each scene into the languages specified in the story creation.
+    -   **Output:** Updates the `translated_text` JSONB field for the scene.
+-   **`render_worker`**:
+    -   **Trigger:** Runs only after the `image_worker` and `audio_worker` have completed for all scenes of a story.
+    -   **Action:** Downloads all images and audio files, applies Ken Burns effect to images, and uses FFmpeg to compile them into the final video.
+    -   **Output:** The final `video.mp4` is uploaded to Supabase Storage.
 
--   **Render Worker:**
-    -   **Job Type:** `render_video`
-    -   **Action:** Downloads all scene images and audio files. Uses FFmpeg to stitch them together into a final video file, adding subtitles and background music.
-    -   **Output:** Creates the final `video.mp4` and uploads it as an `asset`.
+### Phase 3: Revisão e Publicação (Review & Publish)
+This phase prepares the metadata and waits for a human decision before going live.
 
--   **Upload Worker:**
-    -   **Job Type:** `upload_youtube`
-    -   **Action:** Uploads the final rendered video to the "The Lost Archives" YouTube channel using the YouTube Data API.
-    -   **Output:** Updates the `story` with the `youtube_url` and `youtube_video_id`.
+-   **`thumbnail_worker`**:
+    -   **Trigger:** Runs after the `render_worker` is complete.
+    -   **Action:** Generates 3 distinct thumbnail options for the video.
+    -   **Output:** Uploads thumbnails to Storage and creates entries in the `thumbnail_options` table.
+-   **`metadata_worker`**:
+    -   **Trigger:** Runs after the `render_worker` is complete.
+    -   **Action:** Generates 3 title options, an SEO-optimized description, and relevant tags.
+    -   **Output:** Creates entries in the `title_options` table and updates the `story`'s metadata.
+-   **`upload_worker`**:
+    -   **Trigger:** **STRICTLY** triggered by an API call from the dashboard (`POST /stories/{id}/publish`). It does not run automatically.
+    -   **Action:** Fetches the final video, the user-selected title and thumbnail, and uploads everything to YouTube.
+    -   **Output:** Updates the `story` with the `youtube_url`.
 
 ## 3. State Flows
 
 ### Story Status Flow
+The primary state machine for a video's lifecycle, reflecting the new phases.
 
-A `story` progresses through a series of statuses, indicating its current stage in the pipeline.
+`pending` → `generating_script` → `producing` → `rendering` → `ready_for_review` → `publishing` → `published`
 
-`pending` → `generating_script` → `generating_images` → `generating_audio` → `generating_subtitles` → `generating_metadata` → `rendering` → `uploading` → `published`
-
--   If any step fails, the status changes to `failed`, and an `error_message` is logged.
+-   A `failed` status can occur at any stage, logging an `error_message`.
 
 ### Job Status Flow
-
-Each `job` has a simpler lifecycle.
+Each task processed by a worker follows this simple lifecycle.
 
 `queued` → `processing` → `completed` | `failed`
 
--   A worker picks up a `queued` job and sets its status to `processing`.
--   Upon successful completion, the status becomes `completed`.
--   If an error occurs, the status becomes `failed`, and details are logged.
-
 ## 4. API Endpoints
 
-A simple API is exposed to manage stories.
+The API is now more integral to the workflow, especially for the review process.
 
 -   `POST /stories`
-    -   **Description:** Creates a new story and kicks off the pipeline.
-    -   **Body:** `{ "topic": "The History of the Roman Empire", "language": "en-US" }`
-    -   **Response:** `{ "story_id": "...", "status": "pending" }`
-
--   `GET /stories/{story_id}`
-    -   **Description:** Retrieves the current status and details of a story.
-    -   **Response:** The full `story` object from the database.
-
--   `GET /stories`
-    -   **Description:** Lists all stories with pagination.
+    -   **Body:** `{ "topic", "description", "target_duration_minutes", "languages" }`
+    -   **Action:** Creates a new story, kicking off Phase 1.
+-   `GET /stories/{id}/review`
+    -   **Action:** Gathers all necessary data for the review page: the video URL from storage, the three title options, and the three thumbnail options.
+-   `POST /stories/{id}/select-title`
+    -   **Action:** Updates the database to mark a specific title option as selected.
+-   `POST /stories/{id}/select-thumbnail`
+    -   **Action:** Updates the database to mark a thumbnail as selected.
+-   `POST /stories/{id}/publish`
+    -   **Action:** The final user approval. This is the sole trigger for the `upload_worker`.
 
 ## 5. Technical Decisions
 
--   **Database as a Queue:** Using a `jobs` table in PostgreSQL is simple and effective for this scale. It avoids the need for a separate message broker like RabbitMQ or SQS initially, simplifying the architecture.
--   **Supabase:** Provides a managed PostgreSQL database, authentication, and file storage in one platform, which is ideal for rapid development. The client libraries are easy to use from the Python workers.
--   **Independent Workers:** Decoupling each step into a separate worker (e.g., running as a separate Cloud Run service or Kubernetes pod) allows for independent scaling, updating, and error handling. If the image worker fails, it doesn't stop the script worker from processing other tasks.
--   **Idempotency:** Workers should be designed to be idempotent where possible. If a job fails and is retried, it should not cause duplicate data or errors.
--   **State Management:** The `status` fields in the `stories` and `jobs` tables provide a clear and auditable trail of the video creation process.
+-   **Human-in-the-Loop:** Introducing a mandatory review step (`ready_for_review` status) prevents fully automated posting, ensuring quality control and adherence to platform guidelines. This is a critical product decision reflected in the architecture.
+-   **Parallelization in Phase 2:** Running image, audio, and translation tasks concurrently is the main source of efficiency in the new pipeline, significantly reducing the total time to get a video to the review stage.
+-   **Decoupled Publication:** The `upload_worker` is now completely decoupled from the main automated pipeline and is only activated by a direct user action via the API. This is a safer and more deliberate publication model.
+-   **State-Driven Orchestration:** The system remains state-driven, with the `status` field in the `stories` table being the source of truth that dictates which phase or action is next.

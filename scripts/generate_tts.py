@@ -1,5 +1,6 @@
 
 import os
+import sys
 import argparse
 import requests
 import yaml
@@ -36,7 +37,11 @@ def generate_tts(input_path, output_path, language):
     """
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise ValueError("GOOGLE_API_KEY not found in environment variables.")
+        print("Fatal Error: GOOGLE_API_KEY not found in environment variables.", file=sys.stderr)
+        print("Please set the GOOGLE_API_KEY environment variable in your Cloud Run service.", file=sys.stderr)
+        sys.exit(1)
+
+    print("Successfully loaded GOOGLE_API_KEY from environment.")
 
     voices_config = load_voices_config()
     if not voices_config or language not in voices_config:

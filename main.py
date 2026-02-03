@@ -115,13 +115,21 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
             '--output', audio_path
         ], capture_output=True, text=True, timeout=300)
         
+        tts_success = result.returncode == 0
         steps.append({
             'step': 'generate_tts',
-            'success': result.returncode == 0
+            'success': tts_success,
+            'output': result.stdout[:1000] if tts_success else result.stderr[:1000]
         })
         
+        if not tts_success:
+            return {'success': False, 'steps': steps, 'error': 'TTS generation failed'}
+        
+        # Check overall success
+        overall_success = all(step['success'] for step in steps)
+        
         return {
-            'success': True,
+            'success': overall_success,
             'steps': steps,
             'output_dir': output_dir,
             'script_preview': script_content[:1000] + '...' if len(script_content) > 1000 else script_content,

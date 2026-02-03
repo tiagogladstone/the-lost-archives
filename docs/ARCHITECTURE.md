@@ -1,99 +1,114 @@
-# 🏛️ Arquitetura do Pipeline - The Lost Archives
+# Architecture: The Lost Archives - SaaS Pipeline
 
-Este documento detalha a arquitetura do pipeline de geração de vídeo do projeto "The Lost Archives".
+This document outlines the SaaS architecture for the automated YouTube channel "The Lost Archives". The system is designed as a distributed set of workers that communicate via a central database, which acts as a job queue.
 
-## Visão Geral
+## 1. Architecture Diagram (ASCII)
 
-O projeto utiliza uma arquitetura baseada em micro-serviços orquestrados por um fluxo principal, que pode ser executado localmente ou em um ambiente de nuvem (Cloud Run). Cada etapa do processo é encapsulada em um script Python independente, garantindo modularidade e fácil manutenção.
+```
+              +-----------------+      +-----------------+      +-----------------+
+              |   API Gateway   |----->|  New Story API  |----->|   Supabase DB   |
+              | (e.g., Cloud Run) |      |  (FastAPI)      |      | (PostgreSQL)    |
+              +-----------------+      +-------+---------+      +--------+--------+
+                                               |                           ^
+                                               |                           | (Update Status)
+                                               v                           |
+                                       +-------+---------+      +----------+----------+
+                                       |      JOBS       |      |      STORIES        |
+                                       |     (Queue)     |      |      (State)        |
+                                       +-----------------+      +---------------------+
+                                               |
+                                               | (Poll for jobs)
+                 +-----------------------------+--------------------------------+
+                 |                             |                                |
+                 v                             v                                v
+        +--------+--------+           +--------+--------+             +----------+----------+
+        |  Script Worker  |           |  Image Worker   |             |    Audio Worker     |
+        |   (Gemini)      |           |   (Imagen 4)    |             |    (Google TTS)     |
+        +-----------------+           +-----------------+             +---------------------+
+                 |                             |                                |
+                 |                             |                                |
+                 v                             v                                v
+        +--------+--------+           +--------+--------+             +----------+----------+
+        | Metadata Worker |           |  Render Worker  |             |   Upload Worker     |
+        |   (Gemini)      |           |    (FFmpeg)     |             | (YouTube API)       |
+        +-----------------+           +-----------------+             +---------------------+
 
-## Diagrama do Fluxo
-
-```mermaid
-graph TD
-    A[Start: Topic & Language] --> B{generate_script.py};
-    B --> C[script.txt];
-    C --> D{generate_tts.py};
-    C --> E{generate_metadata.py};
-    C --> F{fetch_media.py};
-    D --> G[narration.mp3];
-    E --> H[metadata.json];
-    F --> I[videos/];
-    F --> J[images/];
-    G & H & I & J --> K{render_video.py};
-    K --> L[final_video.mp4];
-    L --> M{upload_youtube.py};
-    M --> N[🚀 YouTube];
 ```
 
-## Componentes
+## 2. Worker Descriptions
 
-### 1. **`generate_script.py`**
-- **Responsabilidade:** Criar o roteiro do vídeo.
-- **Input:** Tópico e idioma.
-- **Processo:**
-    1. Conecta-se à API do **Google Gemini**.
-    2. Utiliza um prompt pré-definido para solicitar um roteiro sobre o tópico fornecido, estruturado para narração.
-    3. Salva o roteiro gerado em `script.txt`.
-- **Output:** `script.txt`
+The system is composed of several independent workers, each responsible for a specific task in the video creation pipeline. They poll the `jobs` table for tasks.
 
-### 2. **`generate_tts.py`**
-- **Responsabilidade:** Converter o roteiro em áudio de narração.
-- **Input:** `script.txt` e idioma.
-- **Processo:**
-    1. Lê o conteúdo do `script.txt`.
-    2. Conecta-se à API do **Google Cloud Text-to-Speech (TTS)**.
-    3. Seleciona uma voz neural com base no idioma e nas configurações (`voices.yaml`).
-    4. Converte o texto em áudio.
-- **Output:** `narration.mp3`
+-   **Script Worker:**
+    -   **Job Type:** `generate_script`
+    -   **Action:** Takes a `topic` from a `story` and uses a generative AI (Gemini) to write a complete script. It then breaks the script down into individual `scenes`.
+    -   **Output:** Updates the `story` with the full `script_text` and creates multiple `scenes` entries linked to the story.
 
-### 3. **`generate_metadata.py`**
-- **Responsabilidade:** Criar metadados para o vídeo do YouTube.
-- **Input:** Tópico e `script.txt`.
-- **Processo:**
-    1. Conecta-se à API do **Google Gemini**.
-    2. Envia o tópico e o roteiro para gerar:
-        - Títulos (3 variações para A/B testing)
-        - Descrição otimizada para SEO
-        - Tags relevantes
-    3. Formata a saída em JSON.
-- **Output:** `metadata.json`
+-   **Image Worker:**
+    -   **Job Type:** `generate_images`
+    -   **Action:** For each `scene` in a story, it generates an image prompt and uses an image generation model (Imagen 4) to create a visual.
+    -   **Output:** Uploads the generated image to Supabase Storage and updates the `image_url` in the corresponding `scene`.
 
-### 4. **`fetch_media.py`**
-- **Responsabilidade:** Baixar vídeos e imagens de stock.
-- **Input:** `script.txt` (para extrair palavras-chave).
-- **Processo:**
-    1. Analisa o `script.txt` para identificar palavras-chave e temas visuais.
-    2. Conecta-se à API do **Pexels**.
-    3. Busca por vídeos e imagens relevantes com base nas palavras-chave.
-    4. Baixa os arquivos de mídia para os diretórios `assets/videos` e `assets/images`.
-- **Output:** Arquivos de mídia nos diretórios de assets.
+-   **Audio Worker:**
+    -   **Job Type:** `generate_audio`
+    -   **Action:** For each `scene`, it converts the `text_content` into speech using Google TTS.
+    -   **Output:** Uploads the generated audio file to Supabase Storage and updates the `audio_url` in the `scene`.
 
-### 5. **`render_video.py`**
-- **Responsabilidade:** Juntar todos os assets para criar o vídeo final.
-- **Input:** `narration.mp3`, `assets/videos`, `assets/images`, música de fundo.
-- **Processo:**
-    1. Utiliza a biblioteca **FFmpeg**.
-    2. Sincroniza as imagens e vídeos com a narração de áudio.
-    3. Adiciona uma trilha sonora de fundo.
-    4. Renderiza o vídeo final em formato MP4.
-- **Output:** `final_video.mp4`
+-   **Metadata Worker:**
+    -   **Job Type:** `generate_metadata`
+    -   **Action:** Uses a generative AI (Gemini) to create a compelling title, description, and list of tags for the video based on the script.
+    -   **Output:** Updates the `metadata` JSONB field in the `story`.
 
-### 6. **`upload_youtube.py`**
-- **Responsabilidade:** Fazer o upload do vídeo para o YouTube.
-- **Input:** `final_video.mp4`, `metadata.json`.
-- **Processo:**
-    1. Utiliza a **API de Dados do YouTube v3**.
-    2. Autentica-se usando OAuth 2.0 (`client_secrets.json`).
-    3. Faz o upload do `final_video.mp4`.
-    4. Define o título, descrição e tags a partir do `metadata.json`.
-    5. Define o vídeo como "privado" para revisão manual.
-- **Output:** Vídeo publicado no YouTube.
+-   **Render Worker:**
+    -   **Job Type:** `render_video`
+    -   **Action:** Downloads all scene images and audio files. Uses FFmpeg to stitch them together into a final video file, adding subtitles and background music.
+    -   **Output:** Creates the final `video.mp4` and uploads it as an `asset`.
 
-## Integrações
+-   **Upload Worker:**
+    -   **Job Type:** `upload_youtube`
+    -   **Action:** Uploads the final rendered video to the "The Lost Archives" YouTube channel using the YouTube Data API.
+    -   **Output:** Updates the `story` with the `youtube_url` and `youtube_video_id`.
 
-- **Google Gemini:** Utilizado para a geração de roteiros e metadados. A interação é feita via API REST.
-- **Google Cloud TTS:** Converte texto em narração de áudio de alta qualidade.
-- **Pexels API:** Fornece a biblioteca de vídeos e imagens de stock.
-- **YouTube Data API v3:** Permite o upload e gerenciamento de vídeos no canal.
-- **FFmpeg:** Ferramenta de linha de comando para manipulação e renderização de vídeo e áudio.
-- **GitHub Actions:** Orquestra a execução do pipeline em resposta a eventos (ex: push, agendamento, trigger manual).
+## 3. State Flows
+
+### Story Status Flow
+
+A `story` progresses through a series of statuses, indicating its current stage in the pipeline.
+
+`pending` → `generating_script` → `generating_images` → `generating_audio` → `generating_subtitles` → `generating_metadata` → `rendering` → `uploading` → `published`
+
+-   If any step fails, the status changes to `failed`, and an `error_message` is logged.
+
+### Job Status Flow
+
+Each `job` has a simpler lifecycle.
+
+`queued` → `processing` → `completed` | `failed`
+
+-   A worker picks up a `queued` job and sets its status to `processing`.
+-   Upon successful completion, the status becomes `completed`.
+-   If an error occurs, the status becomes `failed`, and details are logged.
+
+## 4. API Endpoints
+
+A simple API is exposed to manage stories.
+
+-   `POST /stories`
+    -   **Description:** Creates a new story and kicks off the pipeline.
+    -   **Body:** `{ "topic": "The History of the Roman Empire", "language": "en-US" }`
+    -   **Response:** `{ "story_id": "...", "status": "pending" }`
+
+-   `GET /stories/{story_id}`
+    -   **Description:** Retrieves the current status and details of a story.
+    -   **Response:** The full `story` object from the database.
+
+-   `GET /stories`
+    -   **Description:** Lists all stories with pagination.
+
+## 5. Technical Decisions
+
+-   **Database as a Queue:** Using a `jobs` table in PostgreSQL is simple and effective for this scale. It avoids the need for a separate message broker like RabbitMQ or SQS initially, simplifying the architecture.
+-   **Supabase:** Provides a managed PostgreSQL database, authentication, and file storage in one platform, which is ideal for rapid development. The client libraries are easy to use from the Python workers.
+-   **Independent Workers:** Decoupling each step into a separate worker (e.g., running as a separate Cloud Run service or Kubernetes pod) allows for independent scaling, updating, and error handling. If the image worker fails, it doesn't stop the script worker from processing other tasks.
+-   **Idempotency:** Workers should be designed to be idempotent where possible. If a job fails and is retried, it should not cause duplicate data or errors.
+-   **State Management:** The `status` fields in the `stories` and `jobs` tables provide a clear and auditable trail of the video creation process.

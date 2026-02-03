@@ -15,3 +15,5 @@ __pycache__/
 
 # Other
 *.DS_Store
+client_secrets.json
+token.json

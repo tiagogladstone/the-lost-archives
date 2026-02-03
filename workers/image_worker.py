@@ -1,10 +1,11 @@
 # /Users/clawdbot/clawd/projects/the-lost-archives/workers/image_worker.py
 from workers.base_worker import BaseWorker
 import google.generativeai as genai
+import google.genai as genai_new
+from google.genai.types import GenerateImagesConfig
 import os
 import logging
 import tempfile
-from google.genai.types import GenerateImagesConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -56,9 +57,9 @@ class ImageWorker(BaseWorker):
 
         # 3. Generate image using Imagen 4
         logging.info(f"[{self.worker_id}] Calling Imagen 4 API...")
-        image_model = "imagen-3.0-generate-001" # Using Imagen 3 as per latest available models
-        image_response = genai.generate_images(
-            model=image_model,
+        client = genai_new.Client(api_key=os.environ['GOOGLE_API_KEY'])
+        image_response = client.models.generate_images(
+            model="imagen-4.0-generate-001",
             prompt=image_prompt,
             config=GenerateImagesConfig(
                 number_of_images=1,
@@ -75,19 +76,20 @@ class ImageWorker(BaseWorker):
         # 4. Upload image to Supabase Storage
         file_path = f"{story_id}/{scene_id}.png"
         
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file:
-            generated_image.image.save(temp_file.name)
-            temp_file.seek(0)
-            
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+            temp_path = temp_file.name
+            generated_image.image.save(temp_path)
+        
+        try:
             logging.info(f"[{self.worker_id}] Uploading image to Supabase Storage at: {file_path}")
-            
-            # The official library has some issues with `upload_file`.
-            # We'll use the raw postgrest/storage API via the client.
-            self.supabase.storage.from_('images').upload(
-                path=file_path,
-                file=temp_file,
-                file_options={"content-type": "image/png"}
-            )
+            with open(temp_path, 'rb') as f:
+                self.supabase.storage.from_('images').upload(
+                    path=file_path,
+                    file=f.read(),
+                    file_options={"content-type": "image/png"}
+                )
+        finally:
+            os.unlink(temp_path)
 
         # 5. Get public URL and update scene
         public_url_res = self.supabase.storage.from_('images').get_public_url(file_path)

@@ -175,32 +175,30 @@ The `/stories/{id}/review` page is the core of the human-in-the-loop process.
 2.  **Selection:** The user must select one title and one thumbnail.
 3.  **Publication:** The "PUBLICAR NO YOUTUBE" button becomes active only after a title and a thumbnail have been selected. Once clicked, the `publish` action is irreversible.
 
-## 7. Orquestração Descentralizada
+## 7. Orquestração Descentralizada e Fila Global de Jobs
 
-Para resolver o bloqueio identificado na auditoria sobre a falta de um "cérebro" orquestrador, o sistema adota um modelo de orquestração descentralizada. Em vez de um serviço central monitorando o estado, cada worker, ao concluir sua tarefa com sucesso, é responsável por verificar se o seu trabalho desbloqueia a próxima fase do pipeline.
+Para resolver o bloqueio identificado na auditoria sobre a falta de um "cérebro" orquestrador, o sistema adota um modelo de **orquestração descentralizada** e uma **fila global de jobs**. Em vez de um serviço central monitorando o estado, cada worker, ao concluir sua tarefa, é responsável por verificar se o seu trabalho desbloqueia a próxima fase do pipeline.
+
+A base da arquitetura é a tabela `jobs` no Supabase, que atua como uma fila global e centralizada para todas as tarefas. Workers não são dedicados a um vídeo; são processos genéricos que requisitam o próximo trabalho disponível de seu tipo na fila. Para mais detalhes sobre a granularidade dos jobs e a lógica de escala, consulte o documento `SCALE-ARCHITECTURE.md`.
 
 ### Lógica de Avanço (Check and Advance)
 A lógica é implementada no `base_worker.py` através do método `check_and_advance(story_id)`.
 
-- **`script_worker` termina:** Cria 3 jobs em paralelo: `generate_images`, `generate_audio`, `generate_translations`. (Esta lógica específica é implementada no `script_worker` em si, não na função base).
+- **`script_worker` termina:** Cria múltiplos jobs granulares em paralelo para a Fase 2: um `generate_image` por cena, um `generate_audio` por cena, e um `translate_scene` por cena por idioma.
 
 - **`image_worker` ou `audio_worker` terminam:**
     - Ao final de seu job, o worker chama `check_and_advance`.
-    - Esta função verifica se **TODAS** as cenas da história já têm tanto `image_url` quanto `audio_url`.
-    - Se a condição for atendida (ou seja, este worker foi o último dos dois tipos a terminar), ele cria o job `render_video` e atualiza o status da história para `rendering`.
-    - Se a condição não for atendida, ele não faz nada, pois o outro worker ainda está em andamento e fará a verificação quando terminar.
+    - Esta função verifica se **TODOS** os jobs de imagem e áudio para a `story` estão completos.
+    - Se a condição for atendida (ou seja, este worker foi o último a terminar), ele cria o job `render_video` e atualiza o status da história para `rendering`.
 
 - **`render_worker` termina:**
-    - Chama `check_and_advance`.
-    - A função verifica se o status é `rendering` e se a `video_url` existe.
-    - Se sim, cria os jobs `generate_thumbnails` e `generate_metadata` em paralelo.
+    - Ao concluir, cria os jobs `generate_thumbnails` e `generate_metadata` em paralelo.
 
 - **`thumbnail_worker` ou `metadata_worker` terminam:**
-    - Chama `check_and_advance`.
-    - A função verifica se os resultados de ambos os workers já existem no banco de dados.
-    - Se sim, o último worker a terminar atualiza o status da história para `ready_for_review`.
+    - O último worker a terminar verifica se ambos os tipos de job estão completos para a `story`.
+    - Se sim, atualiza o status da história para `ready_for_review`.
 
 - **`upload_worker`:**
     - Não participa da orquestração automática. É disparado unicamente por uma ação humana através de uma chamada de API.
 
-Este modelo remove a necessidade de um serviço orquestrador separado, tornando a arquitetura mais resiliente e simples. A lógica de transição de estado é distribuída entre os próprios workers que executam as tarefas.
+Este modelo remove a necessidade de um serviço orquestrador separado, tornando a arquitetura mais resiliente e simples. A lógica de transição de estado é distribuída entre os próprios workers.

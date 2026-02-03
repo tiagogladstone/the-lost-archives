@@ -45,7 +45,15 @@ A criação de uma nova história (story) agora requer os seguintes campos:
 -   [ ] **Configurar Realtime:**
     -   Habilitar a replicação para as tabelas `stories`, `title_options`, e `thumbnail_options` para que o dashboard Vercel receba atualizações em tempo real.
 
-## 4. O Fluxo de 3 Fases
+## 4. Orquestração Descentralizada e Fila de Jobs
+
+A arquitetura adota um modelo de **orquestração descentralizada** baseado em uma **fila global de jobs** (a tabela `jobs`), conforme detalhado nos documentos `ARCHITECTURE.md` e `SCALE-ARCHITECTURE.md`. Não há um serviço orquestrador central. Em vez disso, a lógica de transição de estado é distribuída.
+
+Cada worker, ao concluir seu job, chama uma função `check_and_advance` que verifica se o pipeline daquela `story` pode avançar para a próxima fase. Por exemplo, o último worker de produção (imagem ou áudio) a concluir sua tarefa para uma `story` será responsável por criar o job de `render_video`. Este modelo aumenta a resiliência e simplifica a infraestrutura.
+
+O fluxo de trabalho agora é baseado em jobs granulares (ex: uma tarefa por cena), permitindo processamento paralelo massivo de múltiplas `stories`.
+
+## 5. O Fluxo de 3 Fases
 
 A arquitetura é baseada em três fases distintas que orquestram a criação do vídeo.
 
@@ -59,7 +67,8 @@ Nesta fase, apenas um worker é executado para criar a base da história.
     1.  Usa Gemini para gerar um roteiro completo.
     2.  Divide o roteiro em `scenes` (parágrafos).
     3.  Popula a tabela `scenes` com o texto de cada cena.
--   **Output:** Roteiro completo dividido em cenas.
+    4.  Cria os jobs granulares da Fase 2 (um `generate_image`, um `generate_audio` e um `translate_scene` para cada cena).
+-   **Output:** Roteiro completo dividido em cenas e jobs da Fase 2 enfileirados.
 -   **Transição:** Ao concluir, o status da `story` muda de `generating_script` para `producing`.
 
 ### **FASE 2 - Produção (Paralelo)**
@@ -67,14 +76,14 @@ Nesta fase, apenas um worker é executado para criar a base da história.
 Quando o roteiro está pronto, múltiplos workers são disparados para rodar em paralelo, cada um cuidando de um aspecto da produção.
 
 -   **Worker:** `image_worker`
-    -   **Ação:** Gera de 10 a 15 imagens (uma por cena) usando Imagen 4.
-    -   **Output:** Salva as imagens no Supabase Storage e atualiza as `scenes` com as `image_url`.
+    -   **Ação:** Gera uma imagem para uma cena específica.
+    -   **Output:** Salva a imagem no Supabase Storage e atualiza a `scene` com a `image_url`.
 -   **Worker:** `audio_worker`
-    -   **Ação:** Gera a narração TTS para o texto de cada cena.
-    -   **Output:** Salva os arquivos de áudio no Supabase Storage e atualiza as `scenes` com as `audio_url`.
+    -   **Ação:** Gera a narração TTS para o texto de uma cena.
+    -   **Output:** Salva o áudio no Supabase Storage e atualiza a `scene` com a `audio_url`.
 -   **Worker:** `translation_worker` (NOVO!)
-    -   **Ação:** Traduz o roteiro de cada cena para os idiomas solicitados (ex: PT-BR, ES-ES).
-    -   **Output:** Atualiza o campo `translated_text` (JSONB) em cada `scene`.
+    -   **Ação:** Traduz o roteiro de uma cena para os idiomas solicitados.
+    -   **Output:** Atualiza o campo `translated_text` (JSONB) na `scene`.
 
 ### **FASE 3 - Pós-Produção e Revisão (Sequencial com Gatilho Humano)**
 
@@ -82,43 +91,43 @@ Esta fase começa quando as tarefas da Fase 2 são concluídas e culmina na publ
 
 1.  **Renderização**
     -   **Worker:** `render_worker`
-    -   **Gatilho:** Inicia quando todas as imagens e áudios da Fase 2 estão prontos.
+    -   **Gatilho:** Inicia quando o último worker da Fase 2 termina e a função `check_and_advance` verifica que todos os assets estão prontos.
     -   **Ação:**
         1.  Baixa todas as imagens e áudios.
         2.  Aplica o efeito Ken Burns nas imagens.
         3.  Usa FFmpeg para combinar imagem e áudio, criando o vídeo final.
     -   **Output:** Vídeo final salvo no Supabase Storage.
-    -   **Transição:** Ao concluir, o status da `story` muda de `rendering` para `ready_for_review`.
+    -   **Transição:** Ao concluir, cria os jobs de metadados/thumbnail e a `story` aguarda a próxima verificação.
 
 2.  **Preparação para Revisão**
     -   **Worker:** `thumbnail_worker` (NOVO!)
         -   **Ação:** Gera 3 opções de thumbnail para o vídeo.
         -   **Output:** Salva as thumbnails no Storage e cria 3 entradas na tabela `thumbnail_options`.
     -   **Worker:** `metadata_worker`
-        -   **Ação:** Gera 3 opções de título, uma descrição otimizada para SEO e tags relevantes.
+        -   **Ação:** Gera 3 opções de título (não editáveis), uma descrição otimizada para SEO e tags relevantes.
         -   **Output:** Cria 3 entradas na tabela `title_options` e atualiza a `story` com a descrição e tags.
+    -   **Transição:** O último worker a terminar (thumbnail ou metadata) chama `check_and_advance`, que muda o status da `story` para `ready_for_review`.
 
 3.  **Revisão Humana (Dashboard)**
     -   O sistema agora **PARA** e aguarda a intervenção humana.
-    -   No Dashboard, na página `/stories/{id}/review`, o usuário vê o vídeo renderizado, junto com as 3 opções de título e 3 opções de thumbnail.
+    -   No Dashboard, o usuário vê o vídeo renderizado, as 3 opções de título e 3 opções de thumbnail.
     -   **Fluxo de Review no Dashboard:**
-        1.  Sistema gera 3 thumbnails + 3 títulos + descrição + tags.
-        2.  Usuário vê preview de TUDO no dashboard.
-        3.  O usuário deve **SELECIONAR** o melhor título e a melhor thumbnail entre as opções geradas.
-        4.  Opcionalmente, o usuário pode editar a descrição e as tags.
-        5.  Após a seleção de 1 título e 1 thumbnail, o botão "PUBLICAR" fica ativo.
-    -   **Importante:** A pesquisa indicou que a API do YouTube não suporta o upload de múltiplas thumbnails/títulos para um teste A/B nativo no momento do upload. A funcionalidade "Testar e comparar" do YouTube é configurada no YouTube Studio após o upload. Portanto, o fluxo foi corrigido para "selecionar 1 de 3".
+        1.  O usuário deve **SELECIONAR** o melhor título e a melhor thumbnail entre as opções geradas. Os títulos não são editáveis.
+        2.  Opcionalmente, o usuário pode editar a descrição e as tags, e solicitar a regeneração de thumbnails com feedback.
+        3.  Após a seleção de 1 título e 1 thumbnail, o botão "PUBLICAR" fica ativo.
+    -   **Importante:** A decisão de "selecionar 1 de 3" foi tomada porque a API do YouTube não suporta testes A/B no momento do upload.
     -   A `story` permanece no estado `ready_for_review` até que o botão "PUBLICAR" seja clicado.
 
 4.  **Publicação**
     -   **Worker:** `upload_worker`
-    -   **Gatilho:** Disparado pela chamada da API `POST /stories/{id}/publish`.
+    -   **Gatilho:** Disparado pela criação de um job `upload_youtube` via chamada de API.
     -   **Ação:**
         1.  Baixa o vídeo final.
         2.  Usa o título e thumbnail selecionados pelo usuário.
         3.  Faz o upload do vídeo para o YouTube.
     -   **Output:** Atualiza a `story` com a `youtube_url`.
     -   **Transição:** O status final muda para `published`.
+
 
 ## 5. API (FastAPI)
 
@@ -133,14 +142,9 @@ A API é o ponto de entrada e o mecanismo de controle para o fluxo de revisão.
     -   **Ação:** Retorna os detalhes de uma `story`.
 -   `GET /stories/{id}/review`:
     -   **Ação:** Retorna todos os dados necessários para a página de revisão: preview do vídeo, opções de título e opções de thumbnail.
--   `POST /stories/{id}/select-title`:
-    -   **Body:** `{ "title_option_id": "uuid" }`
-    -   **Ação:** Marca um título como `selected_title` na tabela `stories`.
--   `POST /stories/{id}/select-thumbnail`:
-    -   **Body:** `{ "thumbnail_option_id": "uuid" }`
-    -   **Ação:** Marca a URL de uma thumbnail como `selected_thumbnail_url` na tabela `stories`.
 -   `POST /stories/{id}/publish`:
-    -   **Ação:** Dispara o `upload_worker` para publicar o vídeo com os metadados selecionados. Requer que `selected_title` e `selected_thumbnail_url` não estejam nulos.
+    -   **Body:** `{ "title_option_id": "uuid", "thumbnail_option_id": "uuid", "description": "string", "tags": ["string"] }`
+    -   **Ação:** Dispara o `upload_worker` para publicar o vídeo com os metadados selecionados/editados. Requer que um `title_option_id` e `thumbnail_option_id` sejam fornecidos.
 -   `POST /stories/{id}/retry`:
     -   **Ação:** Re-enfileira o último job que falhou para a `story`.
 

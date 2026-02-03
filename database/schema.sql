@@ -17,7 +17,6 @@ CREATE TABLE stories (
     youtube_url TEXT,
     youtube_video_id TEXT,
     error_message TEXT,
-    retry_count INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -42,9 +41,6 @@ CREATE TABLE title_options (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     story_id UUID REFERENCES stories(id) ON DELETE CASCADE,
     title_text TEXT NOT NULL,
-    feedback_history JSONB DEFAULT '[]', -- Ex: [{"feedback": "troca mystery por secret", "timestamp": "...", "version": 2}]
-    approved BOOLEAN DEFAULT FALSE,
-    version INTEGER DEFAULT 1,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -54,7 +50,6 @@ CREATE TABLE thumbnail_options (
     story_id UUID REFERENCES stories(id) ON DELETE CASCADE,
     image_url TEXT NOT NULL,
     feedback_history JSONB DEFAULT '[]',
-    approved BOOLEAN DEFAULT FALSE,
     version INTEGER DEFAULT 1,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );

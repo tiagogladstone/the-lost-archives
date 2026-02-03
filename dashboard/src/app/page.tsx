@@ -4,7 +4,7 @@ import { StoriesTable } from "@/components/stories-table";
 import { Story } from "@/types";
 
 export default async function DashboardPage() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from("stories")
     .select("id, topic, status, target_duration_minutes, created_at")

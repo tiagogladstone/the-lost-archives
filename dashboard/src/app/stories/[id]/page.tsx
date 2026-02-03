@@ -14,7 +14,7 @@ interface StoryDetailsPageProps {
 type StoryDetails = Story & { description?: string };
 
 export default async function StoryDetailsPage({ params }: StoryDetailsPageProps) {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from("stories")
     .select("*")

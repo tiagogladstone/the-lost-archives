@@ -21,7 +21,7 @@ class ThumbnailWorker(BaseWorker):
         if not self.genai_api_key:
             raise ValueError("GOOGLE_API_KEY must be set.")
         genai.configure(api_key=self.genai_api_key)
-        self.genai_model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        self.genai_model = genai.GenerativeModel('gemini-2.0-flash')
 
     def _generate_thumbnail_prompts(self, topic, script_text):
         """Gera 3 prompts de thumbnail usando Gemini."""

@@ -40,7 +40,7 @@ class ImageWorker(BaseWorker):
         text_content = scene_res.data['text_content']
 
         # 2. Generate a detailed image prompt using Gemini
-        prompt_model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt_model = genai.GenerativeModel('gemini-2.0-flash')
         prompt_template = f"""
         Based on the following narration text from a historical documentary, create a single, detailed, and vivid prompt for an AI image generator (like Imagen 4).
         The image should be cinematic, photorealistic, and capture the mood of the scene. Avoid text, logos, or watermarks.

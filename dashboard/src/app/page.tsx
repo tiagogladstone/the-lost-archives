@@ -1,18 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { PlusCircle } from "lucide-react";
-
-// TODO: Move to a types file
-export type Story = {
-  id: string;
-  topic: string;
-  status: string;
-  target_duration_minutes: number;
-  created_at: string;
-};
+import { StoriesTable } from "@/components/stories-table";
+import { Story } from "@/types";
 
 export default async function DashboardPage() {
   const supabase = createClient();
-  const { data: stories, error } = await supabase
+  const { data, error } = await supabase
     .from("stories")
     .select("id, topic, status, target_duration_minutes, created_at")
     .order("created_at", { ascending: false });
@@ -21,6 +14,8 @@ export default async function DashboardPage() {
     console.error("Error fetching stories:", error);
     // TODO: Handle error state in the UI
   }
+  
+  const stories: Story[] = data || [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -33,8 +28,7 @@ export default async function DashboardPage() {
         </button>
       </div>
       
-      {/* TODO: Pass stories to a client component table with Realtime */}
-      <pre>{JSON.stringify(stories, null, 2)}</pre>
+      <StoriesTable initialStories={stories} />
     </div>
   );
 }

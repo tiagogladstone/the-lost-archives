@@ -42,7 +42,7 @@ class ScriptWorker(BaseWorker):
         logging.info(f"[{self.worker_id}] Generating script for topic: '{topic}'")
 
         # 2. Generate script using Gemini
-        model = genai.GenerativeModel('gemini-1.5-flash') # Using 1.5 flash as it's newer
+        model = genai.GenerativeModel('gemini-2.0-flash') # Using 1.5 flash as it's newer
         prompt = f"""Write a compelling narration script for a YouTube video about: {topic}
 Context: {description}
 Target duration: {duration} minutes (approximately {duration * 150} words)

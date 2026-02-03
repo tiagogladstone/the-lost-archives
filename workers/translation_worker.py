@@ -55,7 +55,7 @@ class TranslationWorker(BaseWorker):
 
 
         # 2. Translate for each target language
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         for lang in target_languages:
             # Check if translation for this language already exists

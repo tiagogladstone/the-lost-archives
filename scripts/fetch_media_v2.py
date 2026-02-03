@@ -1,7 +1,11 @@
 
 import os
+import sys
 import argparse
 import google.generativeai as genai
+
+# Add scripts directory to path so generate_image can be imported
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_image import generate_image
 
 def extract_image_prompts(script_path, num_prompts=12):

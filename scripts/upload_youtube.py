@@ -12,21 +12,46 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
 
 def get_authenticated_service():
-    # Check for existing credentials
+    import base64
     creds = None
-    # The file token.json stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file('client_secrets.json', SCOPES)
-        creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    # Option 1: Check for YOUTUBE_TOKEN_JSON env var (base64 encoded, for Cloud Run)
+    token_b64 = os.environ.get('YOUTUBE_TOKEN_JSON')
+    if token_b64:
+        try:
+            token_json = base64.b64decode(token_b64).decode('utf-8')
+            token_data = json.loads(token_json)
+            creds = Credentials(
+                token=token_data.get('token'),
+                refresh_token=token_data.get('refresh_token'),
+                token_uri=token_data.get('token_uri'),
+                client_id=token_data.get('client_id'),
+                client_secret=token_data.get('client_secret'),
+                scopes=token_data.get('scopes', SCOPES)
+            )
+            print("Using YouTube credentials from environment variable.")
+        except Exception as e:
+            print(f"Warning: Could not load credentials from env: {e}")
+    
+    # Option 2: Check for youtube_token.json file
+    if not creds and os.path.exists('youtube_token.json'):
+        creds = Credentials.from_authorized_user_file('youtube_token.json', SCOPES)
+        print("Using YouTube credentials from youtube_token.json file.")
+    
+    # Option 3: Check for token.json file (legacy)
+    if not creds and os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        print("Using YouTube credentials from token.json file.")
+    
+    # If still no credentials, error out (don't try interactive flow on server)
+    if not creds:
+        raise ValueError("No YouTube credentials found. Set YOUTUBE_TOKEN_JSON env var or provide youtube_token.json file.")
+    
+    # Refresh if needed
+    if creds and creds.expired and creds.refresh_token:
+        from google.auth.transport.requests import Request
+        creds.refresh(Request())
+        print("Refreshed YouTube access token.")
     
     return build('youtube', 'v3', credentials=creds)
 

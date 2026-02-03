@@ -162,6 +162,50 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
         if not render_success:
             return {'success': False, 'steps': steps, 'error': 'Video rendering failed'}
         
+        # Step 6: Upload to YouTube
+        youtube_url = None
+        try:
+            # Read metadata for title/description
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            lang_key = language.replace('-', '_')
+            title = metadata.get('titles', {}).get(lang_key, topic)[:100]
+            description = metadata.get('descriptions', {}).get(lang_key, f'Video about {topic}')
+            tags = ','.join(metadata.get('tags', [topic]))
+            
+            result = subprocess.run([
+                'python', 'scripts/upload_youtube.py',
+                '--video', video_path,
+                '--title', title,
+                '--description', description,
+                '--tags', tags,
+                '--language', language[:2],
+                '--privacy', 'unlisted'
+            ], capture_output=True, text=True, timeout=600)
+            
+            upload_success = result.returncode == 0
+            
+            # Extract YouTube URL from output
+            if upload_success and 'youtu.be/' in result.stdout:
+                import re
+                match = re.search(r'https://youtu\.be/[\w-]+', result.stdout)
+                if match:
+                    youtube_url = match.group(0)
+            
+            steps.append({
+                'step': 'upload_youtube',
+                'success': upload_success,
+                'output': result.stdout[:500] if upload_success else result.stderr[:500],
+                'youtube_url': youtube_url
+            })
+        except Exception as e:
+            steps.append({
+                'step': 'upload_youtube',
+                'success': False,
+                'output': str(e)
+            })
+        
         # Check overall success
         overall_success = all(step['success'] for step in steps)
         
@@ -170,6 +214,7 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
             'steps': steps,
             'output_dir': output_dir,
             'video_path': video_path,
+            'youtube_url': youtube_url,
             'script_preview': script_content[:1000] + '...' if len(script_content) > 1000 else script_content,
             'script_length': len(script_content)
         }

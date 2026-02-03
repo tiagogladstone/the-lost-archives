@@ -17,3 +17,5 @@ __pycache__/
 *.DS_Store
 client_secrets.json
 token.json
+youtube_token.json
+token.json

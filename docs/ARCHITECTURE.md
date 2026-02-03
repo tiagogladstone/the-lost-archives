@@ -43,19 +43,22 @@ This document outlines the refined SaaS architecture for the "The Lost Archives"
                                   v
 +---------------------------------+-----------------------------------------+
 |                                                                           |
-|  PHASE 3: REVIEW & PUBLISH (Human-in-the-loop)                            |
+|  PHASE 3: REVIEW & PUBLISH (Human-in-the-loop with Iterative Refinement)   |
 |  +------------------+  +--------------------+                             |
 |  | thumbnail_worker |  |   metadata_worker  |---> Options written to DB   |
 |  +------------------+  +--------------------+                             |
-|                                                                           |
-|                 (Human reviews on Dashboard)                              |
+|                                     ^                                     |
+|             (Regenerate)            | (Feedback via API)                  |
+|                                     +-----------------------+             |
+|                                                             |             |
+|                 (Human reviews on Dashboard, gives feedback)              |
 |  +------------------+                                                       |
-|  | User clicks PUBLISH |                                                     |
+|  | User clicks PUBLISH | (when all items approved)                           |
 |  +---------+--------+                                                       |
 |            | (POST /stories/{id}/publish)                                 |
 |            v                                                              |
 |  +-----------------+                                                        |
-|  |   upload_worker  |-----> Video on YouTube                               |
+|  |   upload_worker  |-----> Video on YouTube (with 3 titles/thumbs for A/B)|
 |  +-----------------+                                                        |
 |                                                                           |
 +---------------------------------------------------------------------------+
@@ -121,19 +124,28 @@ Each task processed by a worker follows this simple lifecycle.
 
 ## 4. API Endpoints
 
-The API is now more integral to the workflow, especially for the review process.
+The API is the backbone of the iterative review and publication workflow.
 
--   `POST /stories`
-    -   **Body:** `{ "topic", "description", "target_duration_minutes", "languages" }`
-    -   **Action:** Creates a new story, kicking off Phase 1.
--   `GET /stories/{id}/review`
-    -   **Action:** Gathers all necessary data for the review page: the video URL from storage, the three title options, and the three thumbnail options.
--   `POST /stories/{id}/select-title`
-    -   **Action:** Updates the database to mark a specific title option as selected.
--   `POST /stories/{id}/select-thumbnail`
-    -   **Action:** Updates the database to mark a thumbnail as selected.
+-   `POST /stories/{id}/titles/{title_id}/feedback`
+    -   **Body:** `{"feedback": "troca 'mystery' por 'secret'"}`
+    -   **Action:** Triggers an AI regeneration of the specific title using the provided feedback. Updates the `title_text` and increments its `version`. Records the feedback in `feedback_history`.
+
+-   `POST /stories/{id}/titles/{title_id}/approve`
+    -   **Action:** Marks a specific title as approved by setting `approved = true`.
+
+-   `POST /stories/{id}/thumbnails/{thumb_id}/feedback`
+    -   **Body:** `{"feedback": "aumente o contraste, mude texto para X"}`
+    -   **Action:** Triggers an AI regeneration of the thumbnail.
+
+-   `POST /stories/{id}/thumbnails/{thumb_id}/approve`
+    -   **Action:** Marks a thumbnail as approved (`approved = true`).
+
+-   `POST /stories/{id}/description/feedback`
+    -   **Body:** `{"feedback": "adiciona link do canal no início"}`
+    -   **Action:** Regenerates the video description.
+
 -   `POST /stories/{id}/publish`
-    -   **Action:** The final user approval. This is the sole trigger for the `upload_worker`.
+    -   **Action:** The final step. This endpoint is **only callable if all 3 titles and 3 thumbnails are marked as `approved`**. It triggers the `upload_worker` to send the video and all approved metadata to YouTube for A/B testing.
 
 ## 5. Technical Decisions
 
@@ -141,3 +153,39 @@ The API is now more integral to the workflow, especially for the review process.
 -   **Parallelization in Phase 2:** Running image, audio, and translation tasks concurrently is the main source of efficiency in the new pipeline, significantly reducing the total time to get a video to the review stage.
 -   **Decoupled Publication:** The `upload_worker` is now completely decoupled from the main automated pipeline and is only activated by a direct user action via the API. This is a safer and more deliberate publication model.
 -   **State-Driven Orchestration:** The system remains state-driven, with the `status` field in the `stories` table being the source of truth that dictates which phase or action is next.
+
+## 6. Dashboard UX - The Review Page
+
+The `/stories/{id}/review` page is the core of the human-in-the-loop process. It's designed for efficient, iterative feedback.
+
+```
+┌─────────────────────────────────────────┐
+│ 🎬 Preview do Vídeo                    │
+│ [Player com vídeo renderizado]          │
+├─────────────────────────────────────────┤
+│ 📝 Títulos (3 para teste A/B)          │
+│ 1. "The Lost Library..." [✅ Aprovado]  │
+│ 2. "Alexandria's Secret" [✏️ Editar]   │
+│    └─ Input: "troca Secret por Mystery" │
+│    └─ [Regenerar] [Aprovar]             │
+│ 3. "What Really Happened" [✅ Aprovado] │
+├─────────────────────────────────────────┤
+│ 🎨 Thumbnails (3 para teste A/B)       │
+│ [Thumb1 ✅] [Thumb2 ✏️] [Thumb3 ✅]    │
+│ Thumb2 feedback: "mais contraste"       │
+│ [Regenerar] [Aprovar]                   │
+├─────────────────────────────────────────┤
+│ 📋 Descrição [✅ Aprovada]              │
+│ 🏷️ Tags [✅ Aprovadas]                 │
+├─────────────────────────────────────────┤
+│ [🟢 PUBLICAR NO YOUTUBE]               │
+│ (ativo só quando tudo aprovado)         │
+└─────────────────────────────────────────┘
+```
+
+### User Flow:
+1.  **Initial View:** The user sees the rendered video and the first version of all generated assets (titles, thumbnails, description, tags).
+2.  **Iterative Feedback:** For any item that isn't perfect, the user can provide text feedback and click "Regenerar". The backend AI workers process this feedback and update the item. The UI reflects the new version.
+3.  **Approval:** When an item is satisfactory, the user clicks "Aprovar". The item is marked visually as complete (e.g., with a green checkmark).
+4.  **Publication:** The "PUBLICAR NO YOUTUBE" button remains disabled until every single item (all 3 titles, all 3 thumbnails, description, and tags) has been marked as approved. Once clicked, the `publish` action is irreversible.
+

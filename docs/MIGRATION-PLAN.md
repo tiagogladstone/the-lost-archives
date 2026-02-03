@@ -100,11 +100,18 @@ Esta fase começa quando as tarefas da Fase 2 são concluídas e culmina na publ
 
 3.  **Revisão Humana (Dashboard)**
     -   O sistema agora **PARA** e aguarda a intervenção humana.
-    -   No Dashboard, na página `/stories/{id}/review`, o usuário pode:
-        -   Assistir a um preview do vídeo.
-        -   Selecionar 1 de 3 títulos.
-        -   Selecionar 1 de 3 thumbnails.
-        -   Editar a descrição e as tags.
+    -   No Dashboard, na página `/stories/{id}/review`, o usuário vê o vídeo renderizado, junto com as 3 opções de título e 3 opções de thumbnail.
+    -   **Fluxo de Review no Dashboard:**
+        1.  Sistema gera 3 thumbnails + 3 títulos + descrição + tags.
+        2.  Usuário vê preview de TUDO no dashboard.
+        3.  Para CADA item, pode:
+            -   ✅ Aprovar como está.
+            -   ✏️ Dar feedback em texto livre (ex: "nessa thumb, aumente o contraste e mude o texto para X").
+            -   🔄 Sistema regenera com o feedback usando IA.
+            -   Repetir até aprovar.
+        4.  Quando TODOS os 3 títulos e 3 thumbs estão aprovados → botão "PUBLICAR" fica ativo.
+        5.  YouTube recebe os 3 títulos + 3 thumbs para teste A/B nativo.
+    -   **Importante:** Os 3 títulos e 3 thumbs NÃO são "escolha 1" — são os 3 que vão pro teste A/B do YouTube!
     -   A `story` permanece no estado `ready_for_review` até que o botão "PUBLICAR" seja clicado.
 
 4.  **Publicação**

@@ -124,6 +124,43 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
         
         if not tts_success:
             return {'success': False, 'steps': steps, 'error': 'TTS generation failed'}
+
+        # Step 4: Fetch media from Pexels
+        clips_dir = f"{output_dir}/clips"
+        result = subprocess.run([
+            'python', 'scripts/fetch_media.py',
+            '--script', script_path,
+            '--output', clips_dir
+        ], capture_output=True, text=True, timeout=300)
+
+        fetch_success = result.returncode == 0
+        steps.append({
+            'step': 'fetch_media',
+            'success': fetch_success,
+            'output': result.stdout[:1000] if fetch_success else result.stderr[:1000]
+        })
+
+        if not fetch_success:
+            return {'success': False, 'steps': steps, 'error': 'Media fetching failed'}
+
+        # Step 5: Render final video
+        video_path = f"{output_dir}/final_video.mp4"
+        result = subprocess.run([
+            'python', 'scripts/render_video.py',
+            '--clips_dir', clips_dir,
+            '--narration', audio_path,
+            '--output', video_path
+        ], capture_output=True, text=True, timeout=600)
+        
+        render_success = result.returncode == 0
+        steps.append({
+            'step': 'render_video',
+            'success': render_success,
+            'output': result.stdout[:1000] if render_success else result.stderr[:1000]
+        })
+
+        if not render_success:
+            return {'success': False, 'steps': steps, 'error': 'Video rendering failed'}
         
         # Check overall success
         overall_success = all(step['success'] for step in steps)
@@ -132,6 +169,7 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
             'success': overall_success,
             'steps': steps,
             'output_dir': output_dir,
+            'video_path': video_path,
             'script_preview': script_content[:1000] + '...' if len(script_content) > 1000 else script_content,
             'script_length': len(script_content)
         }

@@ -125,23 +125,51 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
         if not tts_success:
             return {'success': False, 'steps': steps, 'error': 'TTS generation failed'}
 
-        # Step 4: Fetch media from Pexels
+        # Step 4: Fetch media - TRY IMAGEN FIRST
         clips_dir = f"{output_dir}/clips"
-        result = subprocess.run([
-            'python', 'scripts/fetch_media.py',
-            '--script', script_path,
-            '--output', clips_dir
-        ], capture_output=True, text=True, timeout=300)
+        fetch_success = False
 
-        fetch_success = result.returncode == 0
+        # Attempt to use Imagen 4 via fetch_media_v2.py
+        logger.info("Attempting to generate media with Imagen 4...")
+        result_v2 = subprocess.run([
+            'python', 'scripts/fetch_media_v2.py',
+            '--script', script_path,
+            '--output_dir', clips_dir
+        ], capture_output=True, text=True, timeout=600) # Increased timeout for image gen
+
+        fetch_v2_success = result_v2.returncode == 0
         steps.append({
-            'step': 'fetch_media',
-            'success': fetch_success,
-            'output': result.stdout[:1000] if fetch_success else result.stderr[:1000]
+            'step': 'fetch_media_v2 (Imagen)',
+            'success': fetch_v2_success,
+            'output': result_v2.stdout[-1000:] if fetch_v2_success else result_v2.stderr[-1000:]
         })
 
+        if fetch_v2_success:
+            logger.info("Imagen 4 media generation successful.")
+            fetch_success = True
+        else:
+            logger.warning("Imagen 4 media generation failed. Falling back to Pexels.")
+            
+            # Fallback to Pexels via fetch_media.py
+            result_v1 = subprocess.run([
+                'python', 'scripts/fetch_media.py',
+                '--script', script_path,
+                '--output_dir', clips_dir
+            ], capture_output=True, text=True, timeout=300)
+
+            fetch_v1_success = result_v1.returncode == 0
+            steps.append({
+                'step': 'fetch_media_v1 (Pexels Fallback)',
+                'success': fetch_v1_success,
+                'output': result_v1.stdout[-1000:] if fetch_v1_success else result_v1.stderr[-1000:]
+            })
+            
+            if fetch_v1_success:
+                logger.info("Pexels fallback successful.")
+                fetch_success = True
+
         if not fetch_success:
-            return {'success': False, 'steps': steps, 'error': 'Media fetching failed'}
+            return {'success': False, 'steps': steps, 'error': 'All media fetching methods failed'}
 
         # Step 5: Render final video
         video_path = f"{output_dir}/final_video.mp4"

@@ -169,20 +169,30 @@ class VideoGeneratorHandler(BaseHTTPRequestHandler):
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
             
-            lang_key = language.replace('-', '_')
-            title = metadata.get('titles', {}).get(lang_key, topic)[:100]
-            description = metadata.get('descriptions', {}).get(lang_key, f'Video about {topic}')
-            tags = ','.join(metadata.get('tags', [topic]))
+            lang_metadata = metadata.get(language, {})
             
-            result = subprocess.run([
+            # Use the 'direct' title for better SEO, fallback to topic
+            title = lang_metadata.get('titles', {}).get('direct', topic)[:100]
+            description = lang_metadata.get('description', f'Video about {topic}')
+            tags = ','.join(lang_metadata.get('tags', [topic]))
+            
+            # Check for a generated thumbnail
+            thumbnail_path = f"{output_dir}/thumbnail.jpg"
+            
+            upload_command = [
                 'python', 'scripts/upload_youtube.py',
                 '--video', video_path,
                 '--title', title,
                 '--description', description,
                 '--tags', tags,
-                '--language', language[:2],
+                '--language', language, # Pass full language code
                 '--privacy', 'unlisted'
-            ], capture_output=True, text=True, timeout=600)
+            ]
+            
+            if os.path.exists(thumbnail_path):
+                upload_command.extend(['--thumbnail', thumbnail_path])
+
+            result = subprocess.run(upload_command, capture_output=True, text=True, timeout=600)
             
             upload_success = result.returncode == 0
             

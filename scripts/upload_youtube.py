@@ -85,6 +85,18 @@ def upload_video(youtube, video_file, title, description, tags, language=None, c
     print(f"Video uploaded: https://youtu.be/{response['id']}")
     return response['id']
 
+def upload_thumbnail(youtube, video_id, thumbnail_file):
+    print(f"Uploading thumbnail {thumbnail_file} for video ID {video_id}...")
+    try:
+        request = youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(thumbnail_file)
+        )
+        response = request.execute()
+        print(f"Thumbnail uploaded successfully: {response['items'][0]['default']['url']}")
+    except Exception as e:
+        print(f"An error occurred while uploading the thumbnail: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="Upload a video to YouTube.")
     parser.add_argument('--video', required=True, help='Path to the video file.')
@@ -93,6 +105,7 @@ def main():
     parser.add_argument('--tags', default='', help='Comma-separated tags for the video.')
     parser.add_argument('--language', default=None, help='ISO 639-1 language code (e.g., en, pt-BR).')
     parser.add_argument('--privacy', default='unlisted', choices=['public', 'private', 'unlisted'], help='Privacy status of the video.')
+    parser.add_argument('--thumbnail', default=None, help='Path to the thumbnail image file.')
     
     args = parser.parse_args()
     
@@ -107,6 +120,12 @@ def main():
         privacy=args.privacy
     )
     
+    if video_id and args.thumbnail:
+        if os.path.exists(args.thumbnail):
+            upload_thumbnail(youtube, video_id, args.thumbnail)
+        else:
+            print(f"Thumbnail file not found at {args.thumbnail}, skipping upload.")
+
     return video_id
 
 if __name__ == '__main__':

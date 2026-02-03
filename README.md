@@ -128,3 +128,4 @@ python scripts/render_video.py --audio_path /tmp/narration.mp3 --output /tmp/vid
 ## 📜 Licença
 
 Este projeto é privado e todos os direitos são reservados.
+

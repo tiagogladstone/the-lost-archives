@@ -63,7 +63,7 @@ class RenderWorker(BaseWorker):
             file_list_path = os.path.join(temp_dir, "audio_files.txt")
             with open(file_list_path, 'w') as f:
                 for path in audio_paths:
-                    f.write(f"file '{os.path.abspath(path)}'\\n")
+                    f.write(f"file '{os.path.abspath(path)}'\n")
             
             concat_command = [
                 'ffmpeg', '-y', '-f', 'concat', '-safe', '0', 

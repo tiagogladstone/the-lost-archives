@@ -5,52 +5,55 @@
 ### Tabelas
 
 **stories** — Tabela principal
-- `id` UUID PK, `topic`, `description`, `target_duration_minutes`, `languages`
-- `status`: pending | generating_script | producing | rendering | ready_for_review | publishing | published | failed
-- `script_text`, `metadata` (JSONB)
-- `selected_title`, `selected_thumbnail_url`, `youtube_url`, `youtube_video_id`
+- `id` UUID PK, `topic`, `description`
+- `status` TEXT DEFAULT 'draft'
+- Status flow: draft → scripting → producing → rendering → post_production → ready_for_review → publishing → published | failed
+- `target_duration_minutes` INTEGER DEFAULT 8
+- `languages` JSONB DEFAULT '["en-US"]'
+- `style` TEXT DEFAULT 'cinematic' (cinematic | anime | realistic | 3d)
+- `aspect_ratio` TEXT DEFAULT '16:9' (16:9 | 9:16)
+- `script_text`, `video_url`
+- `youtube_url`, `youtube_video_id`
+- `selected_title`, `selected_thumbnail_url`
+- `metadata` JSONB DEFAULT '{}' ({description, tags})
+- `error_message`
 - `created_at`, `updated_at`
 
 **scenes** — Cenas de uma story
-- `id` UUID PK, `story_id` FK, `scene_order`
-- `text_content`, `translated_text` (JSONB multi-idioma)
+- `id` UUID PK, `story_id` FK CASCADE, `scene_order`
+- `text_content`, `translated_text` JSONB DEFAULT '{}' (multi-idioma: {"pt-BR": "texto", "es-ES": "texto"})
 - `image_prompt`, `image_url`, `audio_url`, `duration_seconds`
-- `status`
+- `created_at`
 
-**jobs** — Fila de processamento
-- `id` UUID PK, `story_id` FK, `scene_id` FK (opcional)
-- `job_type`: generate_script | generate_image | generate_audio | translate_scene | render_video | generate_thumbnails | generate_metadata | upload_youtube
-- `status`: queued | processing | completed | failed
-- `worker_id`, `retry_count`, `max_retries`, `next_retry_at`
-- `error_message`, timestamps
+**title_options** — Opções de titulo para revisao
+- `id` UUID PK, `story_id` FK CASCADE, `title_text`
+- `created_at`
 
-**title_options** — Opções de título para revisão
-- `id` UUID PK, `story_id` FK, `title_text`
-
-**thumbnail_options** — Opções de thumbnail para revisão
-- `id` UUID PK, `story_id` FK, `image_url`, `feedback_history` (JSONB), `version`
-
-### Stored Procedure
-
-`claim_next_job(p_job_type, p_worker_id)` — Claiming atômico de jobs com `FOR UPDATE SKIP LOCKED`.
+**thumbnail_options** — Opcoes de thumbnail para revisao
+- `id` UUID PK, `story_id` FK CASCADE, `image_url`, `prompt`
+- `created_at`
 
 ### Trigger
 
-`set_stories_updated_at` — Atualiza `updated_at` automaticamente em stories.
+`update_updated_at_column()` — Funcao que seta `NOW()` no `updated_at`.
+`set_stories_updated_at` — Trigger BEFORE UPDATE em stories que executa `update_updated_at_column()`.
 
-### Índices
+### Indices
 
-- `stories(status)`
-- `jobs(status, job_type)`
-- `scenes(story_id)`
+- `idx_stories_status` — stories(status)
+- `idx_stories_created_at` — stories(created_at DESC)
+- `idx_scenes_story_id` — scenes(story_id)
+- `idx_scenes_story_order` — scenes(story_id, scene_order)
+- `idx_title_options_story_id` — title_options(story_id)
+- `idx_thumbnail_options_story_id` — thumbnail_options(story_id)
 
 ### Foreign Keys
 
-Cascade delete configurado: deletar story remove scenes, jobs, title_options e thumbnail_options.
+Cascade delete configurado: deletar story remove scenes, title_options e thumbnail_options.
 
 ## Storage Buckets
 
-- `images/` — Imagens das cenas
-- `audio/` — Áudios TTS
-- `videos/` — Vídeos renderizados
-- `thumbnails/` — Thumbnails geradas
+- `images/` — Imagens das cenas (PNG)
+- `audio/` — Audios TTS (MP3)
+- `videos/` — Videos renderizados (MP4)
+- `thumbnails/` — Thumbnails geradas (PNG)

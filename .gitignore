@@ -13,6 +13,9 @@ __pycache__/
 .idea/
 .vscode/
 
+# Claude Code
+.claude/
+
 # Other
 *.DS_Store
 client_secrets.json

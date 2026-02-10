@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { apiPost } from '@/lib/api';
+import { Story, CreateStoryRequest } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,6 +17,8 @@ export default function NewStoryPage() {
   const [description, setDescription] = useState('');
   const [duration, setDuration] = useState(8);
   const [languages, setLanguages] = useState(['en-US']);
+  const [style, setStyle] = useState('cinematic');
+  const [aspectRatio, setAspectRatio] = useState('16:9');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,28 +28,20 @@ export default function NewStoryPage() {
     setError(null);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/stories`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          topic,
-          description,
-          target_duration_minutes: duration,
-          languages,
-        }),
-      });
+      const body: CreateStoryRequest = {
+        topic,
+        description,
+        target_duration_minutes: duration,
+        languages,
+        style,
+        aspect_ratio: aspectRatio,
+      };
 
-      if (!response.ok) {
-        throw new Error('Failed to create story. Please try again.');
-      }
-
-      const newStory = await response.json();
+      const newStory = await apiPost<Story>('/stories', body);
       router.push(`/stories/${newStory.id}`);
 
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to create story. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -92,7 +88,6 @@ export default function NewStoryPage() {
           </div>
           <div className="space-y-2">
             <Label>Languages</Label>
-             {/* Note: A proper multi-select would be better here, but using a single select for simplicity for now. */}
             <Select value={languages[0]} onValueChange={(value) => setLanguages([value])}>
               <SelectTrigger>
                 <SelectValue placeholder="Select a language" />
@@ -101,6 +96,32 @@ export default function NewStoryPage() {
                 <SelectItem value="en-US">English (US)</SelectItem>
                 <SelectItem value="pt-BR">Portuguese (Brazil)</SelectItem>
                 <SelectItem value="es-ES">Spanish (Spain)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Style</Label>
+            <Select value={style} onValueChange={setStyle}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a style" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cinematic">Cinematic</SelectItem>
+                <SelectItem value="anime">Anime</SelectItem>
+                <SelectItem value="realistic">Realistic</SelectItem>
+                <SelectItem value="3d">3D</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Aspect Ratio</Label>
+            <Select value={aspectRatio} onValueChange={setAspectRatio}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select aspect ratio" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="16:9">16:9 (Landscape)</SelectItem>
+                <SelectItem value="9:16">9:16 (Portrait / Shorts)</SelectItem>
               </SelectContent>
             </Select>
           </div>

@@ -2,94 +2,32 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
-import { Story } from '@/types';
+import { apiGet, apiPost } from '@/lib/api';
+import { ReviewData, TitleOption, ThumbnailOption, SelectReviewRequest } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-
-interface TitleOption {
-  id: string;
-  title_text: string;
-  story_id: string;
-}
-
-interface ThumbnailOption {
-  id: string;
-  image_url: string;
-  story_id: string;
-  feedback_history: any[];
-  version: number;
-}
 
 export default function ReviewPage({ params }: { params: { id: string } }) {
   const router = useRouter();
-  const supabase = createClient();
   const { id } = params;
 
-  const [story, setStory] = useState<Story | null>(null);
-  const [titles, setTitles] = useState<TitleOption[]>([]);
-  const [thumbnails, setThumbnails] = useState<ThumbnailOption[]>([]);
-  
+  const [reviewData, setReviewData] = useState<ReviewData | null>(null);
   const [selectedTitleId, setSelectedTitleId] = useState<string>('');
   const [selectedThumbId, setSelectedThumbId] = useState<string>('');
-  const [thumbFeedback, setThumbFeedback] = useState<Record<string, string>>({});
-  
-  const [description, setDescription] = useState('');
-  const [tags, setTags] = useState('');
   const [publishing, setPublishing] = useState(false);
-  const [videoUrl, setVideoUrl] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadData() {
       try {
         setLoading(true);
-        
-        // 1. Fetch Story
-        const { data: storyData, error: storyError } = await supabase
-          .from('stories')
-          .select('*')
-          .eq('id', id)
-          .single();
-        
-        if (storyError) throw storyError;
-        setStory(storyData);
-        setDescription(storyData.description || ''); // Pre-fill if available (though type might not have it yet based on index.ts read, but DB likely does)
-
-        // 2. Fetch Titles
-        const { data: titleData, error: titleError } = await supabase
-          .from('title_options')
-          .select('*')
-          .eq('story_id', id);
-          
-        if (titleError) console.error('Error fetching titles:', titleError);
-        else setTitles(titleData || []);
-
-        // 3. Fetch Thumbnails
-        const { data: thumbData, error: thumbError } = await supabase
-          .from('thumbnail_options')
-          .select('*')
-          .eq('story_id', id)
-          .order('version', { ascending: false });
-
-        if (thumbError) console.error('Error fetching thumbnails:', thumbError);
-        else setThumbnails(thumbData || []);
-
-        // 4. Get Video Signed URL
-        const { data: videoData, error: videoError } = await supabase
-          .storage
-          .from('videos')
-          .createSignedUrl(`${id}/final_video.mp4`, 3600); // 1 hour expiry
-
-        if (videoError) console.error('Error fetching video URL:', videoError);
-        else if (videoData) setVideoUrl(videoData.signedUrl);
-
+        const data = await apiGet<ReviewData>(`/stories/${id}/review`);
+        setReviewData(data);
       } catch (err) {
         console.error('Failed to load review data:', err);
+        setError('Failed to load review data.');
       } finally {
         setLoading(false);
       }
@@ -98,41 +36,22 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
     if (id) {
       loadData();
     }
-  }, [id, supabase]);
+  }, [id]);
 
   const handlePublish = async () => {
-    if (!story || !selectedTitleId || !selectedThumbId) return;
+    if (!reviewData || !selectedTitleId || !selectedThumbId) return;
 
     try {
       setPublishing(true);
 
-      const selectedTitle = titles.find(t => t.id === selectedTitleId);
-      const selectedThumb = thumbnails.find(t => t.id === selectedThumbId);
+      // 1. Select title + thumbnail
+      await apiPost<void>(`/stories/${id}/review`, {
+        title_option_id: selectedTitleId,
+        thumbnail_option_id: selectedThumbId,
+      } satisfies SelectReviewRequest);
 
-      // 1. Update Story
-      const { error: updateError } = await supabase
-        .from('stories')
-        .update({
-          selected_title: selectedTitle?.title_text,
-          selected_thumbnail_url: selectedThumb?.image_url,
-          description: description,
-          tags: tags.split(',').map(t => t.trim()), // Assume tags column accepts array, or adapt if string
-          status: 'publishing'
-        })
-        .eq('id', id);
-
-      if (updateError) throw updateError;
-
-      // 2. Create Job
-      const { error: jobError } = await supabase
-        .from('jobs')
-        .insert({
-          story_id: id,
-          job_type: 'upload_youtube',
-          status: 'queued'
-        });
-
-      if (jobError) throw jobError;
+      // 2. Trigger publish (YouTube upload)
+      await apiPost<void>(`/stories/${id}/publish`);
 
       // 3. Redirect
       router.push(`/stories/${id}`);
@@ -149,9 +68,13 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
     return <div className="p-8 text-center">Loading review data...</div>;
   }
 
-  if (!story) {
-    return <div className="p-8 text-center text-red-500">Story not found.</div>;
+  if (error || !reviewData) {
+    return <div className="p-8 text-center text-red-500">{error ?? 'Story not found.'}</div>;
   }
+
+  const { title_options: titles, thumbnail_options: thumbnails, video_url: videoUrl, metadata } = reviewData;
+  const description = (metadata?.description as string) ?? '';
+  const tags = (metadata?.tags as string[]) ?? [];
 
   return (
     <div className="mx-auto max-w-5xl space-y-8 p-6">
@@ -161,7 +84,7 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
           <p className="text-muted-foreground">Select the best assets before publishing to YouTube.</p>
         </div>
         <Badge variant="outline" className="text-lg uppercase">
-          {story.status}
+          ready for review
         </Badge>
       </div>
 
@@ -174,9 +97,9 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
             </CardHeader>
             <CardContent className="p-0">
               {videoUrl ? (
-                <video 
-                  controls 
-                  className="w-full bg-black aspect-video" 
+                <video
+                  controls
+                  className="w-full bg-black aspect-video"
                   src={videoUrl}
                 >
                   Your browser does not support the video tag.
@@ -192,29 +115,29 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
           <Card className="border-zinc-800 bg-zinc-950/30">
             <CardHeader>
               <CardTitle>Metadata</CardTitle>
-              <CardDescription>Optimize for SEO</CardDescription>
+              <CardDescription>Generated by AI</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
-                <Textarea
-                  id="description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="min-h-[150px] bg-zinc-900/50 font-mono text-sm"
-                  placeholder="Video description..."
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tags">Tags (comma separated)</Label>
-                <Input
-                  id="tags"
-                  value={tags}
-                  onChange={(e) => setTags(e.target.value)}
-                  className="bg-zinc-900/50"
-                  placeholder="history, mystery, archives..."
-                />
-              </div>
+              {description && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-zinc-400">Description</p>
+                  <p className="whitespace-pre-wrap rounded-lg bg-zinc-900/50 p-3 text-sm font-mono">
+                    {description}
+                  </p>
+                </div>
+              )}
+              {tags.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-zinc-400">Tags</p>
+                  <div className="flex flex-wrap gap-2">
+                    {tags.map((tag, i) => (
+                      <Badge key={i} variant="secondary" className="text-xs">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -228,7 +151,7 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
             </CardHeader>
             <CardContent className="grid gap-3">
               {titles.length > 0 ? (
-                titles.map((t) => (
+                titles.map((t: TitleOption) => (
                   <label
                     key={t.id}
                     className={`flex cursor-pointer items-center justify-between rounded-lg border p-4 transition-all hover:bg-zinc-900 ${
@@ -264,35 +187,21 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 {thumbnails.length > 0 ? (
-                  thumbnails.map((thumb) => (
-                    <div 
-                      key={thumb.id} 
-                      className="space-y-2"
+                  thumbnails.map((thumb: ThumbnailOption) => (
+                    <div
+                      key={thumb.id}
+                      onClick={() => setSelectedThumbId(thumb.id)}
+                      className={`relative cursor-pointer overflow-hidden rounded-lg border-2 transition-all ${
+                        selectedThumbId === thumb.id
+                          ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
+                          : 'border-transparent hover:border-zinc-700'
+                      }`}
                     >
-                      <div
-                        onClick={() => setSelectedThumbId(thumb.id)}
-                        className={`relative cursor-pointer overflow-hidden rounded-lg border-2 transition-all ${
-                          selectedThumbId === thumb.id
-                            ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
-                            : 'border-transparent hover:border-zinc-700'
-                        }`}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img 
-                          src={thumb.image_url} 
-                          alt={`Thumbnail v${thumb.version}`}
-                          className="aspect-video w-full object-cover"
-                        />
-                        <div className="absolute right-2 top-2 rounded bg-black/60 px-2 py-0.5 text-xs font-bold text-white backdrop-blur-sm">
-                          v{thumb.version}
-                        </div>
-                      </div>
-                      
-                      <Input 
-                        placeholder="Feedback for regeneration..."
-                        className="h-8 text-xs bg-zinc-900/50 border-zinc-800"
-                        value={thumbFeedback[thumb.id] || ''}
-                        onChange={(e) => setThumbFeedback(prev => ({...prev, [thumb.id]: e.target.value}))}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={thumb.image_url}
+                        alt="Thumbnail option"
+                        className="aspect-video w-full object-cover"
                       />
                     </div>
                   ))
@@ -314,7 +223,7 @@ export default function ReviewPage({ params }: { params: { id: string } }) {
               {publishing ? 'Publishing...' : 'CONFIRM & PUBLISH'}
             </Button>
             <p className="mt-2 text-center text-xs text-zinc-500">
-              This will queue the video for YouTube upload.
+              This will upload the video to YouTube.
             </p>
           </div>
         </div>

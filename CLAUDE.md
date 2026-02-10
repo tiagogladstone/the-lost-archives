@@ -1,93 +1,150 @@
-# The Lost Archives
+# The Lost Archives v2
 
 Canal do YouTube totalmente automatizado que gera vídeos sobre história e curiosidades usando IA.
 
 ## Stack
 
 - **Backend:** Python 3.11, FastAPI, Supabase (PostgreSQL + Storage)
-- **Frontend:** Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, shadcn/ui
-- **IA:** Google Gemini 1.5 Flash, Imagen 4, Google Cloud TTS (Wavenet)
-- **Mídia:** FFmpeg, Pexels API (stock footage)
+- **Frontend:** Next.js (App Router) — Fase 5
+- **IA:** Google Gemini 2.0 Flash, Imagen 4, Google Cloud TTS (Wavenet)
+- **Mídia:** FFmpeg
 - **Upload:** YouTube Data API v3 (OAuth 2.0)
-- **Infra:** Docker, Google Cloud Run, GitHub Actions
+- **Infra:** Docker, Google Cloud Run
+
+## Arquitetura: Monolith-first
+
+Tudo em um FastAPI app. Sem job queue, sem workers, sem polling.
+Pipeline orquestrado por código Python com asyncio.
+Cada "worker" virou uma service function em `api/services/`.
+
+```
+                    ┌─────────────┐
+                    │  Dashboard   │  (Fase 5)
+                    │  Next.js     │
+                    └──────┬──────┘
+                           │ HTTP
+                    ┌──────▼──────┐
+                    │   FastAPI    │
+                    │   + Services │
+                    └──────┬──────┘
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         Supabase     Google APIs    FFmpeg
+        (DB+Storage)  (Gemini,TTS,
+                       Imagen,YT)
+```
 
 ## Estrutura de Diretórios
 
 ```
-├── api/            # FastAPI server (endpoints REST)
-├── workers/        # 8 workers de processamento (job queue)
-├── scripts/        # Scripts standalone CLI (legado/utilitário)
-├── dashboard/      # Frontend Next.js (App Router)
-├── database/       # Schema SQL + setup Supabase
-├── config/         # YAML configs (settings, voices, prompts)
-├── docs/           # Documentação técnica
-├── assets/         # Recursos estáticos
-├── output/         # Outputs gerados
-├── main.py         # Entrypoint HTTP legado (Cloud Run)
-├── worker_runner.py # Runner multiprocessing (inicia 8 workers)
-└── upload_youtube.py # Script upload YouTube standalone
+├── api/
+│   ├── main.py                 # FastAPI app
+│   ├── config.py               # Env vars + YAML configs
+│   ├── dependencies.py         # Auth (API key)
+│   ├── routes/
+│   │   ├── stories.py          # CRUD: POST/GET/DELETE /stories
+│   │   ├── review.py           # GET/POST review, POST publish
+│   │   ├── pipeline.py         # POST /pipeline/{id}/{step} (teste)
+│   │   └── health.py           # GET /health
+│   ├── models/
+│   │   ├── story.py            # Pydantic models (request/response)
+│   │   ├── scene.py            # SceneResponse
+│   │   ├── review.py           # ReviewResponse, SelectReviewRequest
+│   │   └── enums.py            # StoryStatus enum
+│   ├── services/
+│   │   ├── pipeline.py         # Orquestrador: run_pipeline(), publish()
+│   │   ├── script.py           # Gemini 2.0 Flash → roteiro + cenas
+│   │   ├── image.py            # Imagen 4 → imagem por cena
+│   │   ├── audio.py            # Google Cloud TTS → áudio por cena
+│   │   ├── translation.py      # Gemini → traduz cenas
+│   │   ├── render.py           # FFmpeg → renderiza vídeo
+│   │   ├── thumbnail.py        # Imagen 4 → 3 thumbnails
+│   │   ├── metadata.py         # Gemini JSON → 3 títulos + desc + tags
+│   │   ├── upload.py           # YouTube Data API v3 → upload
+│   │   └── storage.py          # Wrapper Supabase Storage
+│   └── db/
+│       ├── client.py           # Supabase client singleton
+│       └── repositories/
+│           ├── story_repo.py   # CRUD stories
+│           ├── scene_repo.py   # CRUD scenes
+│           └── options_repo.py # CRUD title/thumbnail options
+├── config/
+│   ├── settings.yaml           # Configurações gerais
+│   ├── voices.yaml             # Mapeamento idioma → voz TTS
+│   └── prompts.yaml            # Prompts do Gemini
+├── database/
+│   └── schema.sql              # Schema (4 tabelas, sem jobs)
+├── workers/                    # LEGADO — referência v1
+├── scripts/                    # LEGADO — referência v1
+├── Dockerfile
+├── requirements.txt
+└── .env.example
 ```
-
-## Arquitetura: Pipeline de 3 Fases
-
-### Fase 1 — Script (Sequencial)
-`script_worker` gera roteiro via Gemini → divide em scenes → cria jobs para fase 2
-
-### Fase 2 — Production (Paralela)
-`image_worker`, `audio_worker`, `translation_worker` processam scenes simultaneamente → `render_worker` compila vídeo final com FFmpeg
-
-### Fase 3 — Review & Publish (Human-in-the-loop)
-`thumbnail_worker` + `metadata_worker` geram opções → usuário revisa no dashboard → `upload_worker` publica no YouTube
 
 ## Fluxo de Status (stories)
 
 ```
-pending → generating_script → producing → rendering → ready_for_review → publishing → published
-                                                                                    → failed
+draft → scripting → producing → rendering → post_production → ready_for_review → publishing → published
+                                                                                              → failed
 ```
+
+## Database (4 tabelas)
+
+- `stories` — principal, com status, style, aspect_ratio
+- `scenes` — FK para stories, com translated_text JSONB
+- `title_options` — 3 opções de título geradas
+- `thumbnail_options` — 3 opções de thumbnail geradas
+
+Sem tabela `jobs`. Sem stored procedure `claim_next_job`.
+
+## Endpoints da API
+
+### CRUD
+- `POST /stories` — Cria story + dispara pipeline em background
+- `GET /stories` — Lista (filtro por status)
+- `GET /stories/{id}` — Detalhe com scenes
+- `DELETE /stories/{id}` — Deleta + limpa storage
+
+### Review & Publish
+- `GET /stories/{id}/review` — Dados de revisão
+- `POST /stories/{id}/review` — Seleciona título + thumbnail
+- `POST /stories/{id}/publish` — Upload YouTube
+
+### Pipeline (teste individual)
+- `POST /pipeline/{id}/{step}` — script, images, audio, translate, render, thumbnails, metadata
+
+### Health
+- `GET /health`
 
 ## Variáveis de Ambiente
 
 ```
 SUPABASE_URL          # URL do projeto Supabase
 SUPABASE_KEY          # Service role key
-GOOGLE_API_KEY        # Gemini + Google Cloud APIs
-PEXELS_API_KEY        # Stock footage
-API_KEY               # Autenticação da API FastAPI
-PORT                  # Porta do servidor (default 8080)
-```
-
-Dashboard (em `dashboard/.env.local`):
-```
-NEXT_PUBLIC_SUPABASE_URL
-NEXT_PUBLIC_SUPABASE_ANON_KEY
-NEXT_PUBLIC_API_URL
+GOOGLE_API_KEY        # Gemini + Imagen + TTS
+YOUTUBE_TOKEN_JSON    # Base64 encoded OAuth2 credentials
+API_KEY               # Autenticação da API
+PORT                  # Porta (default 8000)
 ```
 
 ## Convenções
 
-- Workers herdam de `BaseWorker` e implementam `process(job)`
-- Job claiming atômico via stored procedure `claim_next_job` (FOR UPDATE SKIP LOCKED)
-- Scripts standalone em `/scripts` com `if __name__ == "__main__"` + argparse
-- Jobs são granulares: 1 job por cena (imagem, áudio, tradução)
-- Multi-idioma via JSONB (`translated_text` em scenes)
-- Retry automático com backoff: 30s → 60s → 120s, max 3 tentativas
+- Services são async functions, não classes
+- Pipeline orquestrado por `asyncio.gather` (paralelo por cena)
+- Storage wrapper centraliza upload/download/URL
+- Repositories abstraem queries Supabase
+- Config carregado via `api/config.py` (env + YAML)
+- Autenticação: header `X-API-Key`
 
-## Comandos Úteis
+## Comandos
 
 ```bash
-# API
-cd api && uvicorn main:app --reload --port 8000
+# API (dev)
+uvicorn api.main:app --reload --port 8000
 
-# Workers (todos de uma vez)
-python worker_runner.py
+# Swagger UI
+open http://localhost:8000/docs
 
-# Worker individual
-python -m workers.script_worker
-
-# Dashboard
-cd dashboard && npm run dev
-
-# Script standalone (exemplo)
-python scripts/generate_script.py --topic "Ancient Rome"
+# Docker
+docker build -t the-lost-archives . && docker run -p 8000:8000 --env-file .env the-lost-archives
 ```

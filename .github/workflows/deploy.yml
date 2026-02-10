@@ -13,29 +13,44 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: read
       id-token: write
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Google Auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-      
+
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
-      
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE }} \
             --source . \
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
+            --cpu 1 \
             --memory 2Gi \
+            --min-instances 0 \
+            --max-instances 3 \
             --timeout 900 \
-            --set-env-vars "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},PEXELS_API_KEY=${{ secrets.PEXELS_API_KEY }}"
+            --set-env-vars "\
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }},\
+          SUPABASE_KEY=${{ secrets.SUPABASE_KEY }},\
+          GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},\
+          API_KEY=${{ secrets.API_KEY }},\
+          YOUTUBE_TOKEN_JSON=${{ secrets.YOUTUBE_TOKEN_JSON }}"
+
+      - name: Health Check
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE }} \
+            --region ${{ env.REGION }} \
+            --format 'value(status.url)')
+          curl -sf "${SERVICE_URL}/health" || exit 1

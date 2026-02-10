@@ -12,4 +12,4 @@ music_volume: 0.15
 
 # API settings
 pexels_videos_per_keyword: 3
-gemini_model: "gemini-1.5-flash"
+gemini_model: "gemini-2.0-flash"

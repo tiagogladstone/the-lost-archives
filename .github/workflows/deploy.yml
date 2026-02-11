@@ -42,12 +42,8 @@ jobs:
             --min-instances 0 \
             --max-instances 3 \
             --timeout 900 \
-            --set-env-vars "\
-          SUPABASE_URL=${{ secrets.SUPABASE_URL }},\
-          SUPABASE_KEY=${{ secrets.SUPABASE_KEY }},\
-          GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},\
-          API_KEY=${{ secrets.API_KEY }},\
-          YOUTUBE_TOKEN_JSON=${{ secrets.YOUTUBE_TOKEN_JSON }}"
+            --port 8000 \
+            --set-env-vars "SUPABASE_URL=${{ secrets.SUPABASE_URL }},SUPABASE_KEY=${{ secrets.SUPABASE_KEY }},GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},API_KEY=${{ secrets.API_KEY }},YOUTUBE_TOKEN_JSON=${{ secrets.YOUTUBE_TOKEN_JSON }}"
 
       - name: Health Check
         run: |

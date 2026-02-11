@@ -34,8 +34,8 @@ def _apply_ken_burns(input_path: str, output_path: str, duration: float, effect:
     vf_options = {
         "zoom_in": f"zoompan=z='min(zoom+0.0015,1.5)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
         "zoom_out": f"zoompan=z='if(lte(zoom,1.0),1.5,max(1.001,zoom-0.0015))':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}",
-        "pan_left": f"zoompan=z=1.2:d=1:x='iw/2-(iw/zoom/2)-(iw*t)/(2*({duration}))':y='ih/2-(ih/zoom/2)':s={w}x{h}",
-        "pan_right": f"zoompan=z=1.2:d=1:x='iw/2-(iw/zoom/2)+(iw*t)/(2*({duration}))':y='ih/2-(ih/zoom/2)':s={w}x{h}",
+        "pan_left": f"zoompan=z=1.2:d={total_frames}:x='iw/2-(iw/zoom/2)-((on/{total_frames})*(iw/zoom/5))':y='ih/2-(ih/zoom/2)':s={w}x{h}",
+        "pan_right": f"zoompan=z=1.2:d={total_frames}:x='iw/2-(iw/zoom/2)+((on/{total_frames})*(iw/zoom/5))':y='ih/2-(ih/zoom/2)':s={w}x{h}",
     }
 
     vf = vf_options[effect]
@@ -111,7 +111,7 @@ async def render_video(story_id: str) -> str:
         narration_duration = _get_media_duration(narration_path)
         clip_duration = narration_duration / len(image_paths)
 
-        # Apply Ken Burns to each image
+        # Apply Ken Burns to each image (clean up source images after each to save memory)
         effect_cycle = itertools.cycle(EFFECTS)
         processed_clips = []
         for i, img_path in enumerate(image_paths):
@@ -119,6 +119,7 @@ async def render_video(story_id: str) -> str:
             clip_path = os.path.join(clips_dir, f"clip_{i:03d}.mp4")
             _apply_ken_burns(img_path, clip_path, clip_duration, effect, resolution)
             processed_clips.append(clip_path)
+            os.remove(img_path)  # free memory on tmpfs
 
         if not processed_clips:
             raise RuntimeError("No clips were processed")

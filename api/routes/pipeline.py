@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+import traceback
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.dependencies import verify_api_key
 from api.db.repositories import story_repo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"], dependencies=[Depends(verify_api_key)])
 
@@ -53,8 +57,14 @@ async def run_translate(story_id: uuid.UUID):
 async def run_render(story_id: uuid.UUID):
     _get_story_or_404(story_id)
     from api.services.render import render_video
-    video_url = await render_video(str(story_id))
-    return {"status": "ok", "video_url": video_url}
+    try:
+        video_url = await render_video(str(story_id))
+        return {"status": "ok", "video_url": video_url}
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        logger.error(f"Render [{story_id}] FAILED: {error_msg}\n{traceback.format_exc()}")
+        story_repo.update_status(str(story_id), "failed", error_message=error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @router.post("/{story_id}/thumbnails")
